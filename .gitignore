@@ -1,0 +1,9 @@
+__pycache__
+
+.env
+.cache
+.vscode
+
+ComfyUI_windows_portable*
+torch*
+user_settings.json

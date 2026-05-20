@@ -1,0 +1,112 @@
+[
+    {
+        "repo":"https://github.com/Comfy-Org/ComfyUI-Manager",
+        "ref":"main",
+        "description":"ComfyUI-Manager is an extension designed to enhance the usability of ComfyUI. It offers management functions to install, remove, disable, and enable various custom nodes of ComfyUI."
+    },
+    {
+        "repo":"https://github.com/kijai/ComfyUI-KJNodes",
+        "ref":"main",
+        "description":"Various quality of life and masking related nodes and scripts made by combining functionality of existing nodes for ComfyUI."
+    },
+    {
+        "repo": "https://github.com/ltdrdata/ComfyUI-Impact-Pack",
+        "ref": "main",
+        "description": "Custom node pack for ComfyUI This node pack helps to conveniently enhance images through Detector, Detailer, Upscaler, Pipe, and more."
+    },
+    {
+        "repo":"https://github.com/ltdrdata/ComfyUI-Impact-Subpack",
+        "ref":"main",
+        "description":"Requested by Impact-Pack."
+    },
+    {
+        "repo":"https://github.com/chrisgoringe/cg-use-everywhere",
+        "ref":"main",
+        "description":"Shortcut nodes to avoid complex graph."
+    },
+    {
+        "repo":"https://github.com/Fannovel16/comfyui_controlnet_aux",
+        "ref":"main",
+        "description":"Plug-and-play ComfyUI node sets for making ControlNet hint images."
+    },
+    {
+        "repo": "https://github.com/rgthree/rgthree-comfy",
+        "ref": "main",
+        "description": "A collection of nodes and improvements created while messing around with ComfyUI. I made them for myself to make my workflow cleaner, easier, and faster."
+    },
+    {
+      "repo": "https://github.com/nunchaku-tech/ComfyUI-nunchaku",
+      "ref": "main",
+      "description": "This repository provides the ComfyUI plugin for Nunchaku, an efficient inference engine for 4-bit neural networks quantized with SVDQuant."
+    },
+    {
+      "repo":"https://github.com/city96/ComfyUI-GGUF",
+      "ref": "main",
+      "description": "Support for model files stored in the GGUF format popularized by llama.cpp."
+    },
+    {
+      "repo": "https://github.com/alexisrolland/ComfyUI-Phi",
+      "ref": "main",
+      "description": "Custom ComfyUI nodes to run Microsoft's Phi models."
+    },
+    {
+        "repo": "https://github.com/BigStationW/ComfyUi-Scale-Image-to-Total-Pixels-Advanced",
+        "ref": "main",
+        "description": "A more advanced version of the original node."
+    },
+    {
+        "repo": "https://github.com/cubiq/ComfyUI_IPAdapter_plus",
+        "ref": "main",
+        "description": "The IPAdapter are very powerful models for image-to-image conditioning. The subject or even just the style of the reference image(s) can be easily transferred to a generation. Think of it as a 1-image lora."
+    },
+    {
+        "repo": "https://github.com/ssitu/ComfyUI_UltimateSDUpscale",
+        "ref": "main",
+        "description": "ComfyUI nodes for the Ultimate Stable Diffusion Upscale script by Coyote-A. This is a wrapper for the script used in the A1111 extension."
+    },
+    {
+        "repo": "https://github.com/alexcong/ComfyUI_QwenVL",
+        "ref": "master",
+        "description": "This repository provides ComfyUI nodes that wrap the latest vision-language and language-only checkpoints from the Qwen family."
+    },
+    {
+        "repo": "https://github.com/TinyTerra/ComfyUI_tinyterraNodes",
+        "ref": "main",
+        "description": "A selection of custom nodes for ComfyUI."
+    },
+        {
+        "repo": "https://github.com/cubiq/ComfyUI_essentials",
+        "ref": "main",
+        "description": "Essential nodes that are weirdly missing from ComfyUI core. With few exceptions they are new features and not commodities."
+    },
+    {
+        "repo": "https://github.com/yolain/ComfyUI-Easy-Use",
+        "ref": "main",
+        "description": "ComfyUI-Easy-Use is an efficiency custom nodes integration package, which is extended on the basis of TinyTerraNodes."
+    },
+    {
+        "repo": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
+        "ref": "main",
+        "description": "Some usefull helpers for ComfyUi like autocompletion, new loaders, model previews, history..."
+    },
+        {
+        "repo": "https://github.com/WASasquatch/was-node-suite-comfyui",
+        "ref": "main",
+        "description": "A node suite for ComfyUI with many new nodes, such as image processing, text processing, and more."
+    },
+    {
+        "repo": "https://github.com/Suzie1/ComfyUI_Comfyroll_CustomNodes",
+        "ref": "main",
+        "description": "Many useful utilities nodes for ComfyUI."
+    },
+    {
+        "repo": "https://github.com/evanspearman/ComfyMath",
+        "ref": "main",
+        "description": "Provides Math Nodes for ComfyUI."
+    },
+    {
+        "repo": "https://github.com/PozzettiAndrea/ComfyUI-DepthAnythingV3",
+        "ref": "main",
+        "description": "Custom nodes for Depth Anything V3 integration with ComfyUI."
+    }
+]
