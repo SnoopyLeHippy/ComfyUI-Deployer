@@ -1,13 +1,20 @@
-﻿"""Copy the ComfyUI Deployer project itself into a generated bundle.
+"""Clone the ComfyUI Deployer project into a generated bundle.
 
-This lets the bundle ship with the deployer UI alongside the portable ComfyUI
-install, so end users can re-run installs/updates against the bundled tree.
+The bundle ships the deployer alongside the portable ComfyUI install so end
+users can re-run installs/updates against the bundled tree. We *clone* the
+project's ``origin`` remote (current branch) rather than copying the working
+tree: the bundle gets a clean checkout with git history and without
+local/uncommitted or git-ignored files.
+
+The clone runs *before* ComfyUI is downloaded, while the destination is still
+empty — that way ``git clone`` targets an empty directory (it refuses a
+non-empty one) and no temporary folder is needed. The matching
+``user_settings.json`` is generated at the end, once the custom nodes have been
+cloned (it is git-ignored, so it never comes from the clone).
 """
 
-import fnmatch
 import json
 import os
-import shutil
 
 from deployer.core import git_ops
 from deployer.settings import UserSettings
@@ -19,30 +26,37 @@ def _project_root() -> str:
     return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def _gitignore_patterns(project_root: str) -> list[str]:
-    path = os.path.join(project_root, ".gitignore")
-    if not os.path.exists(path):
-        return []
-    with open(path, "r", encoding="utf-8") as fh:
-        return [line.strip() for line in fh if line.strip() and not line.startswith("#")]
+def clone_deployer_into_bundle(dest_dir: str) -> None:
+    """Clone the ComfyUI Deployer ``origin`` remote into *dest_dir*.
 
+    Checks out the current branch (best-effort — falls back to the remote's
+    default branch) and drops ``download_comfy.bat`` (never shipped in bundles).
+    Must run while *dest_dir* is still empty.
+    """
+    if os.path.isdir(dest_dir) and os.listdir(dest_dir):
+        raise RuntimeError(
+            f"Destination '{dest_dir}' is not empty. The ComfyUI Deployer is cloned "
+            "first, so the destination must be an empty folder. Empty it (or pick "
+            "another) and try again."
+        )
 
-def _make_should_ignore(patterns: list[str]):
-    def _should_ignore(rel_path: str) -> bool:
-        name = os.path.basename(rel_path)
-        if name == "download_comfy.bat":
-            return True
-        rel_unix = rel_path.replace("\\", "/")
-        for pat in patterns:
-            pat_clean = pat.rstrip("/")
-            if fnmatch.fnmatch(name, pat_clean):
-                return True
-            if fnmatch.fnmatch(rel_unix, pat_clean):
-                return True
-            if fnmatch.fnmatch(rel_unix, pat_clean + "/*"):
-                return True
-        return False
-    return _should_ignore
+    project_root = _project_root()
+    repo_url = git_ops.get_remote_url(project_root)
+    if not repo_url:
+        raise RuntimeError(
+            "Cannot add ComfyUI Deployer to the bundle: no 'origin' remote found "
+            f"in {project_root}."
+        )
+    branch = git_ops.get_current_branch(project_root)
+
+    print(f"Cloning ComfyUI Deployer ({repo_url}) into {dest_dir}...")
+    git_ops.clone(repo_url, dest_dir, cwd=os.path.dirname(dest_dir) or ".")
+    if branch and branch != "HEAD":
+        git_ops.checkout(branch, cwd=dest_dir, check=False)
+
+    stray_bat = os.path.join(dest_dir, "download_comfy.bat")
+    if os.path.exists(stray_bat):
+        os.remove(stray_bat)
 
 
 def _bundle_node_metadata(bundle_cn_dir: str) -> list[dict]:
@@ -79,53 +93,14 @@ def _bundle_node_metadata(bundle_cn_dir: str) -> list[dict]:
     return bundle_nodes
 
 
-def copy_debugger_to_bundle(bundle_cn_dir: str) -> None:
-    """Copy the ComfyUI Deployer project files into the bundle destination folder.
+def write_bundle_user_settings(dest_dir: str, bundle_cn_dir: str) -> None:
+    """Generate the bundle's ``user_settings.json`` at *dest_dir*.
 
-    Rules:
-
-    * Exclude ``download_comfy.bat`` and anything matched by ``.gitignore``.
-    * Generate a fresh ``user_settings.json`` containing only the nodes
-      whose clone folder exists inside *bundle_cn_dir*.
+    Contains only the nodes whose clone folder exists inside *bundle_cn_dir*.
+    Run after the custom nodes have been cloned into the bundle.
     """
-    project_root = _project_root()
-    # bundle_cn_dir = …/<dest>/ComfyUI_windows_portable/ComfyUI/custom_nodes
-    bundle_root = os.path.dirname(os.path.dirname(bundle_cn_dir))  # …/ComfyUI_windows_portable
-    dst_root = os.path.dirname(bundle_root)                         # the user-chosen dest
-
-    print(f"Copying ComfyUI Deployer project to {dst_root}...")
-
-    should_ignore = _make_should_ignore(_gitignore_patterns(project_root))
-
-    for dirpath, dirnames, filenames in os.walk(project_root):
-        rel_dir = os.path.relpath(dirpath, project_root)
-        if rel_dir == ".":
-            rel_dir = ""
-        if rel_dir and should_ignore(rel_dir):
-            dirnames.clear()
-            continue
-
-        # Prune ignored subdirs in-place so os.walk doesn't descend into them
-        dirnames[:] = [
-            d for d in dirnames
-            if not should_ignore(os.path.join(rel_dir, d) if rel_dir else d)
-        ]
-
-        dst_dir = os.path.join(dst_root, rel_dir) if rel_dir else dst_root
-        os.makedirs(dst_dir, exist_ok=True)
-
-        for fname in filenames:
-            rel_file = os.path.join(rel_dir, fname) if rel_dir else fname
-            if should_ignore(rel_file):
-                continue
-            # user_settings.json is generated separately below
-            if fname == "user_settings.json":
-                continue
-            src_file = os.path.join(dirpath, fname)
-            shutil.copy2(src_file, os.path.join(dst_dir, fname))
-
     bundle_nodes = _bundle_node_metadata(bundle_cn_dir)
-    dst_settings = os.path.join(dst_root, "user_settings.json")
+    dst_settings = os.path.join(dest_dir, "user_settings.json")
     with open(dst_settings, "w", encoding="utf-8") as fh:
         json.dump({"nodes": bundle_nodes}, fh, indent=4, ensure_ascii=False)
-    print(f"Wrote user_settings.json with {len(bundle_nodes)} node(s) to {dst_root}")
+    print(f"Wrote user_settings.json with {len(bundle_nodes)} node(s) to {dest_dir}")

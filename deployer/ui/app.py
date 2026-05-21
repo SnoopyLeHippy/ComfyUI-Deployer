@@ -109,6 +109,7 @@ class CustomNodeDeployerApp(QMainWindow):
     _orphan_found = pyqtSignal(str, str, str, str, bool)  # name, repo, ref, description, from_workflow
     _workflow_done = pyqtSignal(object)          # dict with resolved/conflicts/unresolved
     _bundle_workflow_resolved = pyqtSignal(object)  # dict for bundle creation path
+    _ui_call = pyqtSignal(object)  # marshals a callable onto the UI thread from worker threads
 
     def __init__(self):
         super().__init__()
@@ -223,6 +224,10 @@ class CustomNodeDeployerApp(QMainWindow):
         self._orphan_found.connect(self._add_orphan_card)
         self._workflow_done.connect(self._on_workflow_done)
         self._bundle_workflow_resolved.connect(self._on_bundle_workflow_resolved)
+        # Queued (cross-thread) connection: emitting from a worker thread runs the
+        # callable on the UI thread. QTimer.singleShot does NOT work here because
+        # worker threads have no Qt event loop.
+        self._ui_call.connect(lambda fn: fn())
 
         # ComfyUI subprocess runner: callbacks emit signals so they run on the UI thread
         self._comfy_runner = ComfyRunner(
@@ -285,7 +290,7 @@ class CustomNodeDeployerApp(QMainWindow):
                     c.is_pending_update = True
                     c.refresh()
                     self._refresh_install_btn()
-                QTimer.singleShot(0, _mark)
+                self._ui_call.emit(_mark)
 
     def eventFilter(self, obj, event):
         if obj is self.scroll_area.viewport() and event.type() == QEvent.Type.Resize:
@@ -317,7 +322,7 @@ class CustomNodeDeployerApp(QMainWindow):
             self._execute_plan(plan)
             print("Done!")
         finally:
-            QTimer.singleShot(0, self._refresh_cards)
+            self._ui_call.emit(self._refresh_cards)
 
     def _execute_plan(self, plan: InstallPlan) -> None:
         """Run an :class:`InstallPlan`. Order matters: errors → uninstall →
@@ -423,7 +428,7 @@ class CustomNodeDeployerApp(QMainWindow):
 
     def _clear_busy(self) -> None:
         """Marshall a busy-state reset onto the UI thread (call from any thread)."""
-        QTimer.singleShot(0, lambda: self._set_busy(False))
+        self._ui_call.emit(lambda: self._set_busy(False))
 
     def _resolve_workflows_for_bundle(self, dest: str, wf_paths: list[str], include_debugger: bool):
         """Background thread: resolve workflow node types across all selected workflows."""
