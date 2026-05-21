@@ -79,8 +79,7 @@ class CreateBundleDialog(QDialog):
         self._add_debugger_cb.setStyleSheet(theme.CHECKBOX_STYLE)
         self._add_debugger_cb.setChecked(False)
         self._add_debugger_cb.setToolTip(
-            "Copy this tool into the bundle destination (excluding download_comfy.bat and git-ignored files), "
-            "generate a matching user_settings.json, and create Run_ComfyUI_Deployer.bat."
+            "Clone this tool into the bundle destination "
         )
         layout.addWidget(self._add_debugger_cb)
 

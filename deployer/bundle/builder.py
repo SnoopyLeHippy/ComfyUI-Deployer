@@ -12,7 +12,10 @@ from deployer.bundle.node_cloner import (
     clone_node_into_bundle,
     install_bundle_requirements,
 )
-from deployer.bundle.project_copier import copy_debugger_to_bundle
+from deployer.bundle.project_copier import (
+    clone_deployer_into_bundle,
+    write_bundle_user_settings,
+)
 from deployer.bundle.workflow_parser import (
     extract_workflow_info,
     find_custom_node_dirs_for_types,
@@ -61,6 +64,13 @@ def create_bundle(
         print(f"Found {len(node_types)} node types, {len(model_refs)} model references in workflows.")
         needed_cn_dirs = find_custom_node_dirs_for_types(node_types, src_custom_nodes)
         print(f"Custom node dirs to include: {needed_cn_dirs or 'none'}")
+
+    # --- Step 0: Clone the ComfyUI Deployer into the still-empty destination ---
+    # Done before downloading ComfyUI so ``git clone`` targets an empty dir
+    # (it refuses a non-empty one) and no temporary folder is needed. The
+    # matching user_settings.json is written at the very end (Step 7).
+    if include_debugger:
+        clone_deployer_into_bundle(dest_dir)
 
     # --- Step 1: Download and extract a clean ComfyUI ---
     version = get_comfyui_version()
@@ -135,8 +145,10 @@ def create_bundle(
         copy_models_for_bundle(src_models, dst_models, model_refs)
     # If no workflows were given, keep the default (empty) models dir.
 
-    # --- Step 7: Copy ComfyUI Deployer project ---
+    # --- Step 7: Generate the bundle's user_settings.json ---
+    # The deployer itself was cloned in Step 0; now that the custom nodes are in
+    # place we can record them.
     if include_debugger:
-        copy_debugger_to_bundle(dst_cn)
+        write_bundle_user_settings(dest_dir, dst_cn)
 
     print(f"Bundle created at {dst_portable}")
