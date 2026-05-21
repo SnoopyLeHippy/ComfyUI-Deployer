@@ -16,6 +16,7 @@ existing node-type / model-ref parsers work unchanged. When only the API
 
 import json
 import os
+from collections.abc import Iterator
 
 
 _WORKFLOW_IMAGE_EXTENSIONS = {".png", ".webp", ".jpg", ".jpeg"}
@@ -156,3 +157,50 @@ def _graph_from_prompt(prompt: dict) -> dict | None:
     if not nodes:
         return None
     return {"nodes": nodes}
+
+
+# ---------------------------------------------------------------------------
+# Subgraph-aware node iteration
+# ---------------------------------------------------------------------------
+
+def iter_graph_nodes(data: dict) -> Iterator[dict]:
+    """Yield every node in a workflow graph, descending into subgraphs.
+
+    Newer ComfyUI workflows store reusable **subgraphs** under
+    ``definitions.subgraphs``; each subgraph is shaped like a normal graph
+    with its own ``nodes`` list. A node in the main graph that instantiates a
+    subgraph carries the subgraph's UUID as its ``type`` (see
+    :func:`collect_subgraph_ids`). Those UUID "nodes" are still yielded — the
+    caller filters them out where appropriate.
+    """
+    if not isinstance(data, dict):
+        return
+    for node in data.get("nodes", []):
+        if isinstance(node, dict):
+            yield node
+    definitions = data.get("definitions")
+    if isinstance(definitions, dict):
+        for subgraph in definitions.get("subgraphs", []):
+            if isinstance(subgraph, dict):
+                yield from iter_graph_nodes(subgraph)
+
+
+def collect_subgraph_ids(data: dict) -> set[str]:
+    """Return the set of subgraph-definition IDs (UUID strings) in *data*.
+
+    A node whose ``type`` equals one of these IDs is a subgraph instance, not
+    a custom node, so it must not be treated as a missing node type.
+    """
+    ids: set[str] = set()
+    if not isinstance(data, dict):
+        return ids
+    definitions = data.get("definitions")
+    if isinstance(definitions, dict):
+        for subgraph in definitions.get("subgraphs", []):
+            if not isinstance(subgraph, dict):
+                continue
+            sid = subgraph.get("id")
+            if isinstance(sid, str) and sid:
+                ids.add(sid)
+            ids |= collect_subgraph_ids(subgraph)
+    return ids

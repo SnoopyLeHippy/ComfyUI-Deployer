@@ -21,7 +21,11 @@ from deployer.config import (
     EXTENSION_NODE_MAP_URL,
 )
 from deployer.core.http import download_file
-from deployer.core.workflow_io import load_workflow_graph
+from deployer.core.workflow_io import (
+    collect_subgraph_ids,
+    iter_graph_nodes,
+    load_workflow_graph,
+)
 
 
 # Node types handled by the ComfyUI frontend — never in NODE_CLASS_MAPPINGS.
@@ -134,13 +138,16 @@ def extract_workflow_node_types(workflow_path: str) -> set[str]:
     """Return the set of ``node.type`` values used by a workflow.
 
     *workflow_path* may be a ``.json`` export or a ComfyUI-generated image
-    with the workflow embedded in its metadata.
+    with the workflow embedded in its metadata. Nodes nested inside subgraph
+    definitions are included; the subgraph UUID "types" themselves are
+    excluded (they are instances, not custom nodes).
     """
     data = load_workflow_graph(workflow_path)
+    subgraph_ids = collect_subgraph_ids(data)
     types: set[str] = set()
-    for node in data.get("nodes", []):
+    for node in iter_graph_nodes(data):
         ntype = node.get("type")
-        if isinstance(ntype, str) and ntype:
+        if isinstance(ntype, str) and ntype and ntype not in subgraph_ids:
             types.add(ntype)
     return types
 

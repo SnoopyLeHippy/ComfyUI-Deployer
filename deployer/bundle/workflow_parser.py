@@ -7,7 +7,11 @@ carry the workflow in their metadata; both are loaded via
 
 import os
 
-from deployer.core.workflow_io import load_workflow_graph
+from deployer.core.workflow_io import (
+    collect_subgraph_ids,
+    iter_graph_nodes,
+    load_workflow_graph,
+)
 
 
 # File extensions that identify a model file in workflow widget values.
@@ -68,9 +72,10 @@ def extract_workflow_info(workflow_paths: list[str]) -> tuple[set[str], set[str]
 
     for wf_path in workflow_paths:
         data = load_workflow_graph(wf_path)
-        for node in data.get("nodes", []):
+        subgraph_ids = collect_subgraph_ids(data)
+        for node in iter_graph_nodes(data):
             ntype = node.get("type")
-            if isinstance(ntype, str) and ntype:
+            if isinstance(ntype, str) and ntype and ntype not in subgraph_ids:
                 node_types.add(ntype)
             for val in node.get("widgets_values", []):
                 if not isinstance(val, str) or not val.strip():
