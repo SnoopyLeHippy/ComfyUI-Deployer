@@ -45,6 +45,26 @@ def _uv_available(python_exe: str) -> bool:
     return proc.returncode == 0
 
 
+def ensure_uv(python_exe: str, *, stream_output: bool = True) -> bool:
+    """Make sure the ``uv`` module is importable by *python_exe*.
+
+    This matters for freshly downloaded bundle pythons: the ComfyUI portable
+    archive does not ship ``uv``, so without it :func:`_base_cmd` falls back to
+    ``pip install -U`` — which upgrades a directly-listed ``torch`` to the CPU
+    wheel from PyPI and clobbers the bundle's CUDA build ("Torch not compiled
+    with CUDA enabled"). Installing uv keeps the install path identical to the
+    main tool's. Returns True if uv is available afterwards.
+    """
+    if _uv_available(python_exe):
+        return True
+    print("  uv not found in bundle python; installing uv...")
+    rc = _run([python_exe, "-m", "pip", "install", "uv"], stream_output=stream_output)
+    _uv_available.cache_clear()
+    if rc != 0:
+        print(f"  uv install exited with code {rc}; falling back to pip.")
+    return _uv_available(python_exe)
+
+
 def _base_cmd(python_exe: str) -> tuple[list[str], str]:
     """Return (command prefix, human label) for the preferred installer."""
     if _uv_available(python_exe):

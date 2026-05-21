@@ -3,10 +3,16 @@
 import os
 
 from deployer.core import git_ops
-from deployer.core.pip_runner import find_requirement_files, install_requirement_files
+from deployer.core.pip_runner import (
+    ensure_uv,
+    find_requirement_files,
+    install_requirement_files,
+)
 
 
-_REQUIREMENTS_MAX_DEPTH = 2
+# Match the main tool's install_requirements depth so nested node requirements
+# (e.g. a subpackage shipping its own requirements.txt) are picked up too.
+_REQUIREMENTS_MAX_DEPTH = 4
 
 
 def clone_node_into_bundle(repo_url: str, ref: str, custom_nodes_dir: str) -> None:
@@ -35,4 +41,11 @@ def install_bundle_requirements(python_exe: str, custom_nodes_dir: str, node_dir
             _REQUIREMENTS_MAX_DEPTH,
         ))
 
-    install_requirement_files(python_exe, req_files, stream_output=False)
+    if not req_files:
+        return
+
+    # The bundle python ships without uv. Bootstrap it so requirements install
+    # via ``uv pip install`` (no -U) and the CUDA torch already in the bundle is
+    # left untouched — matching the main tool's behaviour exactly.
+    ensure_uv(python_exe, stream_output=True)
+    install_requirement_files(python_exe, req_files, stream_output=True)
