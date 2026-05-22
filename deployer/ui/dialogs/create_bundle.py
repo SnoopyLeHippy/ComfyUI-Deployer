@@ -68,11 +68,23 @@ class CreateBundleDialog(QDialog):
         layout.addLayout(wf_row)
 
         help_lbl = QLabel(
-            "When workflows are provided, only the custom nodes and models used in those workflows will be included."
+            "When workflows are provided, only the custom nodes (and, when \"Add models\" "
+            "is enabled, the models) used in those workflows are included."
         )
         help_lbl.setStyleSheet(theme.HELP_TEXT_STYLE)
         help_lbl.setWordWrap(True)
         layout.addWidget(help_lbl)
+
+        # --- Add models checkbox ---
+        self._add_models_cb = QCheckBox("Add models")
+        self._add_models_cb.setStyleSheet(theme.CHECKBOX_STYLE)
+        self._add_models_cb.setChecked(False)
+        self._add_models_cb.setToolTip(
+            "Copy model files into the bundle. With workflow(s) selected only the "
+            "referenced models are copied; otherwise the entire models/ folder is "
+            "copied (can be very large). Not available for the sharable .bat."
+        )
+        layout.addWidget(self._add_models_cb)
 
         # --- Add ComfyUI Deployer checkbox ---
         self._add_debugger_cb = QCheckBox("Add ComfyUI Deployer")
@@ -82,6 +94,29 @@ class CreateBundleDialog(QDialog):
             "Clone this tool into the bundle destination "
         )
         layout.addWidget(self._add_debugger_cb)
+
+        # --- Export as sharable .bat file ---
+        self._bat_cb = QCheckBox("Export as sharable .bat file")
+        self._bat_cb.setStyleSheet(theme.CHECKBOX_STYLE)
+        self._bat_cb.setChecked(False)
+        self._bat_cb.setToolTip(
+            "Write a single self-contained .bat instead of a full bundle. When run on "
+            "another machine it clones ComfyUI Deployer, downloads the matching ComfyUI, "
+            "and installs the selected nodes & requirements. Models are NOT included."
+        )
+        self._bat_cb.toggled.connect(self._on_bat_toggled)
+        layout.addWidget(self._bat_cb)
+
+        # --- Export advanced settings (only meaningful in .bat mode) ---
+        self._adv_settings_cb = QCheckBox("Export advanced settings")
+        self._adv_settings_cb.setStyleSheet(theme.CHECKBOX_STYLE)
+        self._adv_settings_cb.setChecked(False)
+        self._adv_settings_cb.setEnabled(False)
+        self._adv_settings_cb.setToolTip(
+            "Embed extra_model_paths.yaml and the advanced folder settings "
+            "(model / output / input) into the generated .bat."
+        )
+        layout.addWidget(self._adv_settings_cb)
 
         layout.addStretch()
 
@@ -107,6 +142,21 @@ class CreateBundleDialog(QDialog):
 
         self._dest_path = ""
         self._wf_paths: list[str] = []
+
+    def _on_bat_toggled(self, checked: bool):
+        """Toggle .bat-only mode.
+
+        The .bat always clones the ComfyUI Deployer (it's needed to install the
+        nodes), so "Add ComfyUI Deployer" is forced on and disabled. The .bat
+        never ships models, so "Add models" is forced off and disabled. The
+        advanced-settings export only applies to the .bat.
+        """
+        self._adv_settings_cb.setEnabled(checked)
+        if checked:
+            self._add_debugger_cb.setChecked(True)
+            self._add_models_cb.setChecked(False)
+        self._add_debugger_cb.setEnabled(not checked)
+        self._add_models_cb.setEnabled(not checked)
 
     def _pick_dest(self):
         path = QFileDialog.getExistingDirectory(self, "Select destination folder", os.path.expanduser("~"))
@@ -141,3 +191,12 @@ class CreateBundleDialog(QDialog):
 
     def include_debugger(self) -> bool:
         return self._add_debugger_cb.isChecked()
+
+    def include_models(self) -> bool:
+        return self._add_models_cb.isChecked()
+
+    def export_as_bat(self) -> bool:
+        return self._bat_cb.isChecked()
+
+    def export_advanced_settings(self) -> bool:
+        return self._adv_settings_cb.isChecked()

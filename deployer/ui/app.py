@@ -26,7 +26,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from deployer.bundle import create_bundle
+from deployer.bundle import create_bundle, create_sharable_bat
 from deployer.core.comfy_runner import ComfyRunner
 from deployer.core.filesystem import force_remove_readonly
 from deployer.core.installer import (
@@ -406,23 +406,35 @@ class CustomNodeDeployerApp(QMainWindow):
         dest = dialog.dest_path()
         wf_paths = dialog.workflow_paths()
         include_debugger = dialog.include_debugger()
+        include_models = dialog.include_models()
+        export_as_bat = dialog.export_as_bat()
+        export_advanced = dialog.export_advanced_settings()
 
         # Lock the UI for the whole pipeline: resolution → conflict dialog →
         # actual build. Every exit path below must call ``_clear_busy``.
         self._set_busy(True)
 
         if wf_paths:
+            # Resolve regardless of output type: even the .bat needs the extra
+            # repos for workflow nodes that aren't installed locally.
             print("Resolving workflow nodes for bundle...")
             threading.Thread(
                 target=self._resolve_workflows_for_bundle,
-                args=(dest, wf_paths, include_debugger),
+                args=(dest, wf_paths, include_debugger, export_as_bat, export_advanced, include_models),
+                daemon=True,
+            ).start()
+        elif export_as_bat:
+            print(f"Exporting sharable installer to {dest}...")
+            threading.Thread(
+                target=self._run_create_sharable_bat,
+                args=(dest, wf_paths, export_advanced, []),
                 daemon=True,
             ).start()
         else:
             print(f"Creating bundle at {dest}...")
             threading.Thread(
                 target=self._run_create_bundle,
-                args=(dest, wf_paths, include_debugger, []),
+                args=(dest, wf_paths, include_debugger, [], include_models),
                 daemon=True,
             ).start()
 
@@ -430,7 +442,15 @@ class CustomNodeDeployerApp(QMainWindow):
         """Marshall a busy-state reset onto the UI thread (call from any thread)."""
         self._ui_call.emit(lambda: self._set_busy(False))
 
-    def _resolve_workflows_for_bundle(self, dest: str, wf_paths: list[str], include_debugger: bool):
+    def _resolve_workflows_for_bundle(
+        self,
+        dest: str,
+        wf_paths: list[str],
+        include_debugger: bool,
+        export_as_bat: bool = False,
+        export_advanced: bool = False,
+        include_models: bool = False,
+    ):
         """Background thread: resolve workflow node types across all selected workflows."""
         try:
             known_repos = known_repos_from_cards(self._node_cards, self._orphan_cards)
@@ -444,6 +464,9 @@ class CustomNodeDeployerApp(QMainWindow):
             "dest": dest,
             "wf_paths": wf_paths,
             "include_debugger": include_debugger,
+            "export_as_bat": export_as_bat,
+            "export_advanced": export_advanced,
+            "include_models": include_models,
             # Bundle flow only needs the {repo: description} mapping for cloning.
             "resolved": {entry.repo: entry.description for entry in merged.resolved},
             "conflicts": merged.conflicts,
@@ -456,6 +479,9 @@ class CustomNodeDeployerApp(QMainWindow):
         dest = data["dest"]
         wf_paths = data["wf_paths"]
         include_debugger = data["include_debugger"]
+        export_as_bat = data.get("export_as_bat", False)
+        export_advanced = data.get("export_advanced", False)
+        include_models = data.get("include_models", False)
         resolved: dict[str, str] = data["resolved"]
         conflicts = data["conflicts"]
         unresolved = data["unresolved"]
@@ -477,10 +503,19 @@ class CustomNodeDeployerApp(QMainWindow):
         if extra_repos:
             print(f"Workflow resolution: {len(extra_repos)} extra node(s) will be cloned into the bundle.")
 
+        if export_as_bat:
+            print(f"Exporting sharable installer to {dest}...")
+            threading.Thread(
+                target=self._run_create_sharable_bat,
+                args=(dest, wf_paths, export_advanced, extra_repos),
+                daemon=True,
+            ).start()
+            return
+
         print(f"Creating bundle at {dest}...")
         threading.Thread(
             target=self._run_create_bundle,
-            args=(dest, wf_paths, include_debugger, extra_repos),
+            args=(dest, wf_paths, include_debugger, extra_repos, include_models),
             daemon=True,
         ).start()
 
@@ -490,12 +525,33 @@ class CustomNodeDeployerApp(QMainWindow):
         wf_paths: list[str],
         include_debugger: bool = False,
         extra_repos: list[tuple[str, str]] | None = None,
+        include_models: bool = False,
     ):
         try:
-            create_bundle(dest, wf_paths, include_debugger, extra_repos or [])
+            create_bundle(dest, wf_paths, include_debugger, extra_repos or [], include_models)
             print("Bundle created.")
         except Exception as exc:
             print(f"Error creating bundle: {exc}")
+        finally:
+            self._clear_busy()
+
+    def _run_create_sharable_bat(
+        self,
+        dest: str,
+        wf_paths: list[str],
+        export_advanced: bool = False,
+        extra_repos: list[tuple[str, str]] | None = None,
+    ):
+        try:
+            bat_path = create_sharable_bat(
+                dest,
+                wf_paths,
+                export_advanced=export_advanced,
+                extra_repos=extra_repos or [],
+            )
+            print(f"Sharable installer created: {bat_path}")
+        except Exception as exc:
+            print(f"Error creating sharable installer: {exc}")
         finally:
             self._clear_busy()
 

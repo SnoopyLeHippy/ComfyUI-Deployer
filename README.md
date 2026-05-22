@@ -57,6 +57,8 @@ Add nodes from the `+` button
 
 ![Create bundle dialog](docs/screenshots/create_bundle.png)
 
+**Export as sharable `.bat` file** — instead of building a (potentially multi-gigabyte) bundle locally, this writes a single self-contained `install_comfyui_bundle.bat`. When the recipient double-clicks it, the script clones the ComfyUI Deployer, downloads the matching ComfyUI portable, installs `PyQt6` / `pyyaml` / `uv` into the embedded python, recreates `user_settings.json`, then clones the selected custom nodes and installs their requirements. **Models are never included** (too heavy). Tick **Export advanced settings** to also embed `extra_model_paths.yaml` and the advanced folder settings, so an external model library can be wired up on the target machine.
+
 
 ### Advanced settings
 

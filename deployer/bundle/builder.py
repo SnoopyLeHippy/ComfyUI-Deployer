@@ -40,13 +40,18 @@ def create_bundle(
     workflow_paths: list[str],
     include_debugger: bool = False,
     extra_repos: list[tuple[str, str]] | None = None,
+    include_models: bool = False,
 ) -> None:
     """Create a clean portable ComfyUI bundle at *dest_dir*.
 
     When *workflow_paths* is non-empty the bundle is trimmed to just the
-    custom nodes and models referenced by those workflows. Otherwise the
-    full set of installed nodes is included and the default empty
-    ``models/`` folder from a fresh ComfyUI install is kept.
+    custom nodes referenced by those workflows. Otherwise the full set of
+    installed nodes is included.
+
+    Models are only copied when *include_models* is set: with workflows, just
+    the referenced models; without workflows, the entire ``models/`` tree.
+    When it's unset the default empty ``models/`` folder from a fresh ComfyUI
+    install is kept.
 
     *extra_repos* is a list of ``(repo_url, ref)`` pairs to clone into the
     bundle's ``custom_nodes/`` in addition to the installed ones — used
@@ -135,15 +140,19 @@ def create_bundle(
             shutil.rmtree(folder_path, onerror=force_remove_readonly)
         os.makedirs(folder_path, exist_ok=True)
 
-    # --- Step 6: Handle models ---
+    # --- Step 6: Handle models (only when explicitly requested) ---
     dst_models = os.path.join(dst_comfyui, "models")
-    if model_refs:
-        if os.path.isdir(dst_models):
-            shutil.rmtree(dst_models, onerror=force_remove_readonly)
-        os.makedirs(dst_models, exist_ok=True)
-        print("Copying referenced models...")
-        copy_models_for_bundle(src_models, dst_models, model_refs)
-    # If no workflows were given, keep the default (empty) models dir.
+    if include_models:
+        if model_refs:
+            if os.path.isdir(dst_models):
+                shutil.rmtree(dst_models, onerror=force_remove_readonly)
+            os.makedirs(dst_models, exist_ok=True)
+            print("Copying referenced models...")
+            copy_models_for_bundle(src_models, dst_models, model_refs)
+        elif os.path.isdir(src_models):
+            print("Copying all models (this can be large)...")
+            shutil.copytree(src_models, dst_models, dirs_exist_ok=True)
+    # Otherwise keep the default (empty) models dir from the fresh download.
 
     # --- Step 7: Generate the bundle's user_settings.json ---
     # The deployer itself was cloned in Step 0; now that the custom nodes are in

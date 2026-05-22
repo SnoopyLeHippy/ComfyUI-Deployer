@@ -59,38 +59,48 @@ def clone_deployer_into_bundle(dest_dir: str) -> None:
         os.remove(stray_bat)
 
 
-def _bundle_node_metadata(bundle_cn_dir: str) -> list[dict]:
-    """Return a node-entry list for every git-backed dir under *bundle_cn_dir*.
+def collect_node_metadata(
+    cn_dir: str, only_dirs: set[str] | None = None
+) -> list[dict]:
+    """Return a node-entry list for every git-backed dir under *cn_dir*.
 
     Metadata is reused from the main ``user_settings.json`` when the folder
     name is known, otherwise it's read live from the cloned repo's git
-    config (matching the orphan-discovery behaviour).
+    config (matching the orphan-discovery behaviour). When *only_dirs* is
+    given, directories whose name isn't in the set are skipped — used to trim
+    the list to the custom nodes referenced by a set of workflows.
+
+    Works on any custom_nodes tree: the bundle's (to write its
+    ``user_settings.json``) or the live install's (to seed the node list for a
+    sharable-bat export).
     """
     original_lookup = {
         os.path.basename(entry["repo"]): entry for entry in UserSettings.load_nodes()
     }
 
-    bundle_nodes: list[dict] = []
-    if not os.path.isdir(bundle_cn_dir):
-        return bundle_nodes
+    nodes: list[dict] = []
+    if not os.path.isdir(cn_dir):
+        return nodes
 
-    for entry in sorted(os.scandir(bundle_cn_dir), key=lambda e: e.name):
+    for entry in sorted(os.scandir(cn_dir), key=lambda e: e.name):
         if not entry.is_dir(follow_symlinks=True):
+            continue
+        if only_dirs is not None and entry.name not in only_dirs:
             continue
         if not os.path.exists(os.path.join(entry.path, ".git")):
             continue
         name = entry.name
         if name in original_lookup:
-            bundle_nodes.append(dict(original_lookup[name]))
+            nodes.append(dict(original_lookup[name]))
             continue
 
         repo = git_ops.get_remote_url(entry.path)
         if not repo:
             continue
         ref = git_ops.describe_head(entry.path, fallback="HEAD")
-        bundle_nodes.append({"repo": repo, "ref": ref, "description": name})
+        nodes.append({"repo": repo, "ref": ref, "description": name})
 
-    return bundle_nodes
+    return nodes
 
 
 def write_bundle_user_settings(dest_dir: str, bundle_cn_dir: str) -> None:
@@ -99,7 +109,7 @@ def write_bundle_user_settings(dest_dir: str, bundle_cn_dir: str) -> None:
     Contains only the nodes whose clone folder exists inside *bundle_cn_dir*.
     Run after the custom nodes have been cloned into the bundle.
     """
-    bundle_nodes = _bundle_node_metadata(bundle_cn_dir)
+    bundle_nodes = collect_node_metadata(bundle_cn_dir)
     dst_settings = os.path.join(dest_dir, "user_settings.json")
     with open(dst_settings, "w", encoding="utf-8") as fh:
         json.dump({"nodes": bundle_nodes}, fh, indent=4, ensure_ascii=False)

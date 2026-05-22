@@ -383,6 +383,17 @@ QCheckBox::indicator:checked {
 QCheckBox::indicator:hover {
     border: 1px solid %(text_muted)s;
 }
+QCheckBox:disabled {
+    color: %(text_muted)s;
+}
+QCheckBox::indicator:disabled {
+    border: 1px solid %(surface_border)s;
+    background-color: %(surface_neutral)s;
+}
+QCheckBox::indicator:checked:disabled {
+    background-color: %(text_muted)s;
+    border: 1px solid %(text_muted)s;
+}
 """)
 
 

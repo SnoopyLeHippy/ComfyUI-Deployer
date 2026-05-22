@@ -4,6 +4,7 @@ from deployer.ui.dialogs.add_node import AddNodeDialog  # noqa: F401
 from deployer.ui.dialogs.advanced_settings import (  # noqa: F401
     AdvancedSettingsDialog,
     apply_advanced_settings,
+    apply_folder_junctions,
 )
 from deployer.ui.dialogs.create_bundle import CreateBundleDialog  # noqa: F401
 from deployer.ui.dialogs.missing_nodes import MissingNodesDialog  # noqa: F401

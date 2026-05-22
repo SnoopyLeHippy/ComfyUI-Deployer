@@ -64,6 +64,20 @@ def apply_advanced_settings(settings: dict) -> None:
         except Exception as exc:
             print(f"Error removing extra model path: {exc}")
 
+    apply_folder_junctions(settings)
+
+
+def apply_folder_junctions(settings: dict) -> None:
+    """Apply only the ``model_folder`` / ``output_folder`` / ``input_folder``
+    junctions from *settings*, ignoring ``extra_model_path``.
+
+    Split out from :func:`apply_advanced_settings` so headless callers (the
+    sharable-bat installer) can apply the folder junctions without touching
+    ``extra_model_paths.yaml`` — that file is written directly by the .bat.
+
+    Errors on individual entries are logged but don't abort the rest of the
+    apply pass.
+    """
     for key, target_dir, backup_name in _FOLDER_JUNCTIONS:
         backup_dir = os.path.join(os.path.dirname(target_dir), backup_name)
         selected = settings.get(key, "")
