@@ -75,6 +75,18 @@ class CreateBundleDialog(QDialog):
         help_lbl.setWordWrap(True)
         layout.addWidget(help_lbl)
 
+        # --- Include workflows in the export ---
+        self._include_workflows_cb = QCheckBox("Include selected workflows in the export")
+        self._include_workflows_cb.setStyleSheet(theme.CHECKBOX_STYLE)
+        self._include_workflows_cb.setChecked(False)
+        self._include_workflows_cb.setEnabled(False)
+        self._include_workflows_cb.setToolTip(
+            "Copy the selected workflow files alongside the export. In a regular "
+            "bundle they go into a 'workflows/' folder at the export root; in the "
+            "sharable .bat they are embedded and extracted next to the .bat at install time."
+        )
+        layout.addWidget(self._include_workflows_cb)
+
         # --- Add models checkbox ---
         self._add_models_cb = QCheckBox("Add models")
         self._add_models_cb.setStyleSheet(theme.CHECKBOX_STYLE)
@@ -174,10 +186,13 @@ class CreateBundleDialog(QDialog):
         if paths:
             self._wf_paths = [os.path.normpath(p) for p in paths]
             self._wf_edit.setText("; ".join(os.path.basename(p) for p in self._wf_paths))
+            self._include_workflows_cb.setEnabled(True)
 
     def _clear_workflows(self):
         self._wf_paths = []
         self._wf_edit.setText("")
+        self._include_workflows_cb.setChecked(False)
+        self._include_workflows_cb.setEnabled(False)
 
     def _on_create(self):
         if self._dest_path:
@@ -200,3 +215,6 @@ class CreateBundleDialog(QDialog):
 
     def export_advanced_settings(self) -> bool:
         return self._adv_settings_cb.isChecked()
+
+    def include_workflows(self) -> bool:
+        return bool(self._wf_paths) and self._include_workflows_cb.isChecked()

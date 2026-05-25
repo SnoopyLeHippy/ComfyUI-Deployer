@@ -412,6 +412,7 @@ class CustomNodeDeployerApp(QMainWindow):
         wf_paths = dialog.workflow_paths()
         include_debugger = dialog.include_debugger()
         include_models = dialog.include_models()
+        include_workflows = dialog.include_workflows()
         export_as_bat = dialog.export_as_bat()
         export_advanced = dialog.export_advanced_settings()
 
@@ -425,21 +426,21 @@ class CustomNodeDeployerApp(QMainWindow):
             print("Resolving workflow nodes for bundle...")
             threading.Thread(
                 target=self._resolve_workflows_for_bundle,
-                args=(dest, wf_paths, include_debugger, export_as_bat, export_advanced, include_models),
+                args=(dest, wf_paths, include_debugger, export_as_bat, export_advanced, include_models, include_workflows),
                 daemon=True,
             ).start()
         elif export_as_bat:
             print(f"Exporting sharable installer to {dest}...")
             threading.Thread(
                 target=self._run_create_sharable_bat,
-                args=(dest, wf_paths, export_advanced, []),
+                args=(dest, wf_paths, export_advanced, [], False),
                 daemon=True,
             ).start()
         else:
             print(f"Creating bundle at {dest}...")
             threading.Thread(
                 target=self._run_create_bundle,
-                args=(dest, wf_paths, include_debugger, [], include_models),
+                args=(dest, wf_paths, include_debugger, [], include_models, False),
                 daemon=True,
             ).start()
 
@@ -455,6 +456,7 @@ class CustomNodeDeployerApp(QMainWindow):
         export_as_bat: bool = False,
         export_advanced: bool = False,
         include_models: bool = False,
+        include_workflows: bool = False,
     ):
         """Background thread: resolve workflow node types across all selected workflows."""
         try:
@@ -472,6 +474,7 @@ class CustomNodeDeployerApp(QMainWindow):
             "export_as_bat": export_as_bat,
             "export_advanced": export_advanced,
             "include_models": include_models,
+            "include_workflows": include_workflows,
             # Bundle flow only needs the {repo: description} mapping for cloning.
             "resolved": {entry.repo: entry.description for entry in merged.resolved},
             "conflicts": merged.conflicts,
@@ -487,6 +490,7 @@ class CustomNodeDeployerApp(QMainWindow):
         export_as_bat = data.get("export_as_bat", False)
         export_advanced = data.get("export_advanced", False)
         include_models = data.get("include_models", False)
+        include_workflows = data.get("include_workflows", False)
         resolved: dict[str, str] = data["resolved"]
         conflicts = data["conflicts"]
         unresolved = data["unresolved"]
@@ -512,7 +516,7 @@ class CustomNodeDeployerApp(QMainWindow):
             print(f"Exporting sharable installer to {dest}...")
             threading.Thread(
                 target=self._run_create_sharable_bat,
-                args=(dest, wf_paths, export_advanced, extra_repos),
+                args=(dest, wf_paths, export_advanced, extra_repos, include_workflows),
                 daemon=True,
             ).start()
             return
@@ -520,7 +524,7 @@ class CustomNodeDeployerApp(QMainWindow):
         print(f"Creating bundle at {dest}...")
         threading.Thread(
             target=self._run_create_bundle,
-            args=(dest, wf_paths, include_debugger, extra_repos, include_models),
+            args=(dest, wf_paths, include_debugger, extra_repos, include_models, include_workflows),
             daemon=True,
         ).start()
 
@@ -531,9 +535,17 @@ class CustomNodeDeployerApp(QMainWindow):
         include_debugger: bool = False,
         extra_repos: list[tuple[str, str]] | None = None,
         include_models: bool = False,
+        include_workflows: bool = False,
     ):
         try:
-            create_bundle(dest, wf_paths, include_debugger, extra_repos or [], include_models)
+            create_bundle(
+                dest,
+                wf_paths,
+                include_debugger,
+                extra_repos or [],
+                include_models,
+                include_workflows=include_workflows,
+            )
             print("Bundle created.")
         except Exception as exc:
             print(f"Error creating bundle: {exc}")
@@ -546,6 +558,7 @@ class CustomNodeDeployerApp(QMainWindow):
         wf_paths: list[str],
         export_advanced: bool = False,
         extra_repos: list[tuple[str, str]] | None = None,
+        include_workflows: bool = False,
     ):
         try:
             bat_path = create_sharable_bat(
@@ -553,6 +566,7 @@ class CustomNodeDeployerApp(QMainWindow):
                 wf_paths,
                 export_advanced=export_advanced,
                 extra_repos=extra_repos or [],
+                include_workflows=include_workflows,
             )
             print(f"Sharable installer created: {bat_path}")
         except Exception as exc:

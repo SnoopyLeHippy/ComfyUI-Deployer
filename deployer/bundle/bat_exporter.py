@@ -18,8 +18,10 @@ well under cmd's ~8191-char limit.
 """
 
 import base64
+import io
 import json
 import os
+import tarfile
 
 from deployer.bundle.comfyui_archive import get_comfyui_version
 from deployer.bundle.workflow_parser import (
@@ -87,6 +89,20 @@ def _build_node_list(
     return nodes
 
 
+def _build_workflows_tarball_b64(workflow_paths: list[str]) -> str:
+    """Pack workflow files into an uncompressed in-memory tar, base64-encoded.
+
+    The tar is extracted into a ``workflows/`` folder by the .bat at install
+    time. Using a tarball avoids per-file batch-escaping pitfalls for filenames
+    with spaces or unicode characters.
+    """
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        for wf in workflow_paths:
+            tar.add(wf, arcname=os.path.basename(wf))
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
 def _emit_b64(lines: list[str], blob: str, tmp_name: str, out_literal: str) -> None:
     """Append batch lines that rebuild a base64 *blob* into the file *out_literal*.
 
@@ -110,6 +126,7 @@ def _render_bat(
     archive_url: str,
     settings_b64: str,
     extra_yaml_b64: str | None,
+    workflows_b64: str | None = None,
 ) -> str:
     """Return the full CRLF-joined contents of the install .bat."""
     branch_flag = (
@@ -218,6 +235,20 @@ def _render_bat(
             "'ComfyUI_windows_portable/ComfyUI/extra_model_paths.yaml'",
         )
 
+    if workflows_b64:
+        lines += [
+            "",
+            "REM --- Extract embedded workflows into workflows/ ---",
+            "echo Extracting workflows...",
+        ]
+        # Write the tarball as a temp .b64 file, then decode + extract via python.
+        _emit_b64(lines, workflows_b64, "workflows.b64", "'workflows.tar'")
+        lines.append(
+            "%PYTHON_EXEC% -c \"import tarfile,os;os.makedirs('workflows',exist_ok=True);"
+            "tarfile.open('workflows.tar').extractall('workflows')\""
+        )
+        lines.append("del workflows.tar 2>nul")
+
     lines += [
         "",
         "REM --- Clone custom nodes and install their requirements ---",
@@ -241,6 +272,7 @@ def create_sharable_bat(
     *,
     export_advanced: bool = False,
     extra_repos: list[tuple[str, str]] | None = None,
+    include_workflows: bool = False,
 ) -> str:
     """Generate the sharable install ``.bat`` at *dest_dir*; return its path.
 
@@ -248,7 +280,9 @@ def create_sharable_bat(
     list is derived from the live install (trimmed by *workflow_paths* when
     given, plus *extra_repos* resolved from those workflows). When
     *export_advanced* is set, the whole ``settings`` subdict and the current
-    ``extra_model_paths.yaml`` are embedded.
+    ``extra_model_paths.yaml`` are embedded. When *include_workflows* is set,
+    the *workflow_paths* files are tarred and embedded; the .bat extracts them
+    into a ``workflows/`` folder next to itself at install time.
     """
     repo_url = git_ops.get_remote_url(PROJECT_ROOT)
     if not repo_url:
@@ -274,12 +308,18 @@ def create_sharable_bat(
         json.dumps(data, indent=4, ensure_ascii=False).encode("utf-8")
     ).decode("ascii")
 
+    workflows_b64: str | None = None
+    if include_workflows and workflow_paths:
+        workflows_b64 = _build_workflows_tarball_b64(workflow_paths)
+        print(f"Embedded {len(workflow_paths)} workflow(s) into the .bat")
+
     content = _render_bat(
         deployer_repo=repo_url,
         deployer_branch=branch,
         archive_url=_archive_url(get_comfyui_version()),
         settings_b64=settings_b64,
         extra_yaml_b64=extra_yaml_b64,
+        workflows_b64=workflows_b64,
     )
 
     os.makedirs(dest_dir, exist_ok=True)

@@ -41,6 +41,8 @@ def create_bundle(
     include_debugger: bool = False,
     extra_repos: list[tuple[str, str]] | None = None,
     include_models: bool = False,
+    *,
+    include_workflows: bool = False,
 ) -> None:
     """Create a clean portable ComfyUI bundle at *dest_dir*.
 
@@ -57,6 +59,9 @@ def create_bundle(
     bundle's ``custom_nodes/`` in addition to the installed ones — used
     when a workflow needs nodes that aren't installed locally and have
     been resolved against the ComfyUI-Manager DB.
+
+    When *include_workflows* is set, the files in *workflow_paths* are copied
+    into a ``workflows/`` folder at the export root.
     """
     src_custom_nodes = CUSTOM_NODES_DIR
     src_models = _resolve_junction(MODELS_DIR)
@@ -159,5 +164,16 @@ def create_bundle(
     # place we can record them.
     if include_debugger:
         write_bundle_user_settings(dest_dir, dst_cn)
+
+    # --- Step 8: Copy selected workflows next to the bundle root ---
+    if include_workflows and workflow_paths:
+        workflows_dir = os.path.join(dest_dir, "workflows")
+        os.makedirs(workflows_dir, exist_ok=True)
+        for wf in workflow_paths:
+            try:
+                shutil.copy2(wf, os.path.join(workflows_dir, os.path.basename(wf)))
+            except OSError as exc:
+                print(f"  Warning: could not copy workflow '{wf}': {exc}")
+        print(f"Copied {len(workflow_paths)} workflow(s) into {workflows_dir}")
 
     print(f"Bundle created at {dst_portable}")
