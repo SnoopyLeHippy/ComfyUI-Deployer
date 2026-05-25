@@ -22,7 +22,7 @@ class CardState(Enum):
     IMPORT = auto()            # Card pulled in from a workflow import
     ERROR = auto()             # NodeCard with GitLab config error
     MISSING = auto()           # OrphanNodeCard, default appearance
-    ADD_TO_SETTINGS = auto()   # OrphanNodeCard selected for promotion
+    ADD_TO_CONFIG = auto()     # OrphanNodeCard selected for promotion
 
 
 # (stylesheet, badge_text, badge_stylesheet)
@@ -67,10 +67,10 @@ _STATE_PRESENTATION: dict[CardState, tuple[str, str, str]] = {
         "Missing",
         theme.BADGE_MISSING_STYLE,
     ),
-    CardState.ADD_TO_SETTINGS: (
+    CardState.ADD_TO_CONFIG: (
         theme.NODE_CARD_ORPHAN_SELECTED_STYLE,
-        "Add to settings",
-        theme.BADGE_ADD_TO_SETTINGS_STYLE,
+        "Add to config",
+        theme.BADGE_ADD_TO_CONFIG_STYLE,
     ),
 }
 

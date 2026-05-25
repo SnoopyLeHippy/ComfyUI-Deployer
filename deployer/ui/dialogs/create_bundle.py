@@ -107,8 +107,8 @@ class CreateBundleDialog(QDialog):
         self._bat_cb.toggled.connect(self._on_bat_toggled)
         layout.addWidget(self._bat_cb)
 
-        # --- Export advanced settings (only meaningful in .bat mode) ---
-        self._adv_settings_cb = QCheckBox("Export advanced settings")
+        # --- Include advanced settings (only meaningful in .bat mode) ---
+        self._adv_settings_cb = QCheckBox("Include advanced settings")
         self._adv_settings_cb.setStyleSheet(theme.CHECKBOX_STYLE)
         self._adv_settings_cb.setChecked(False)
         self._adv_settings_cb.setEnabled(False)

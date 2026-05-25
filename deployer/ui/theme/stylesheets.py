@@ -336,7 +336,7 @@ QLabel {
 }
 """)
 
-BADGE_ADD_TO_SETTINGS_STYLE = _qss("""
+BADGE_ADD_TO_CONFIG_STYLE = _qss("""
 QLabel {
     background-color: %(magenta_badge)s;
     color: %(text_primary)s;

@@ -103,6 +103,28 @@ def load_builtin_node_types() -> set[str]:
     return builtins
 
 
+def extract_types_from_node_dir(node_dir: str) -> set[str]:
+    """``NODE_CLASS_MAPPINGS`` keys declared by Python files under *node_dir*.
+
+    Used both by :func:`load_installed_custom_node_types` (across all
+    custom_nodes/) and to check, for a single orphan-card directory, whether
+    its nodes are referenced by a given workflow.
+    """
+    types: set[str] = set()
+    if not os.path.isdir(node_dir):
+        return types
+    for dirpath, _, filenames in os.walk(node_dir, followlinks=True):
+        for fname in filenames:
+            if not fname.endswith(".py"):
+                continue
+            try:
+                source = _read_text(os.path.join(dirpath, fname))
+                types.update(_extract_mapping_keys(source))
+            except OSError:
+                continue
+    return types
+
+
 def load_installed_custom_node_types() -> set[str]:
     """Node types registered by custom nodes already on disk in ``custom_nodes/``.
 
@@ -118,15 +140,7 @@ def load_installed_custom_node_types() -> set[str]:
     for entry in os.scandir(CUSTOM_NODES_DIR):
         if not entry.is_dir(follow_symlinks=True):
             continue
-        for dirpath, _, filenames in os.walk(entry.path, followlinks=True):
-            for fname in filenames:
-                if not fname.endswith(".py"):
-                    continue
-                try:
-                    source = _read_text(os.path.join(dirpath, fname))
-                    types.update(_extract_mapping_keys(source))
-                except OSError:
-                    continue
+        types.update(extract_types_from_node_dir(entry.path))
     return types
 
 

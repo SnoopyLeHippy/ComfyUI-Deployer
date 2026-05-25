@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
 )
 
 from deployer.bundle import create_bundle, create_sharable_bat
+from deployer.config import CUSTOM_NODES_DIR
 from deployer.core.comfy_runner import ComfyRunner
 from deployer.core.filesystem import force_remove_readonly
 from deployer.core.installer import (
@@ -37,6 +38,10 @@ from deployer.core.installer import (
 from deployer.core.junctions import is_junction
 from deployer.core.node import CustomNode
 from deployer.core.orphans import discover_orphan_nodes
+from deployer.core.workflow_resolver import (
+    extract_types_from_node_dir,
+    extract_workflow_node_types,
+)
 from deployer.settings import UserSettings
 from deployer.ui import theme
 from deployer.ui.controllers.install_planner import InstallPlan, plan_install
@@ -725,31 +730,37 @@ class CustomNodeDeployerApp(QMainWindow):
         self._node_cards.append(card)
 
     def _on_add_from_workflow(self):
-        """Open a workflow (JSON or ComfyUI image) and create orphan cards for unknown nodes."""
-        path, _ = QFileDialog.getOpenFileName(
+        """Open one or more workflows (JSON or ComfyUI image) and create orphan cards for unknown nodes."""
+        paths, _ = QFileDialog.getOpenFileNames(
             self,
             "Add from workflow",
             os.path.expanduser("~"),
             "ComfyUI Workflows (*.json *.png *.webp *.jpg *.jpeg);;All Files (*)",
         )
-        if not path:
+        if not paths:
             return
-        print(f"Scanning workflow: {path}")
+        if len(paths) == 1:
+            print(f"Scanning workflow: {paths[0]}")
+        else:
+            print(f"Scanning {len(paths)} workflows:")
+            for p in paths:
+                print(f"  - {p}")
         # Lock the UI while the scan runs; cleared in _on_workflow_done or on error.
         self._set_busy(True)
         threading.Thread(
             target=self._resolve_workflow,
-            args=(path,),
+            args=(paths,),
             daemon=True,
         ).start()
 
-    def _resolve_workflow(self, workflow_path: str):
+    def _resolve_workflow(self, workflow_paths: list[str]):
         """Background thread: resolve workflow nodes against the ltdrdata DB."""
         try:
             # Only treat installed repos as "known" so that tracked-but-not-installed
             # nodes are returned in resolved/conflicts for the UI to handle.
             known_repos = known_repos_from_cards(self._node_cards, self._orphan_cards)
-            merged = resolve_workflows([workflow_path], known_repos)
+            merged = resolve_workflows(workflow_paths, known_repos)
+            referenced_orphans = self._orphans_referenced_by_workflows(workflow_paths)
         except Exception as exc:
             print(f"Error scanning workflow: {exc}")
             self._clear_busy()
@@ -759,7 +770,32 @@ class CustomNodeDeployerApp(QMainWindow):
             "conflicts": merged.conflicts,
             "unresolved": merged.unresolved,
             "repo_to_desc": merged.repo_to_desc,
+            "referenced_orphans": referenced_orphans,
         })
+
+    def _orphans_referenced_by_workflows(self, workflow_paths: list[str]) -> list[str]:
+        """Names of orphan cards whose on-disk nodes are used by any of the workflows.
+
+        Lets the workflow scan flip already-installed-but-untracked nodes into
+        the ADD_TO_CONFIG state alongside the regular resolve/conflict pass.
+        """
+        if not self._orphan_cards:
+            return []
+        workflow_types: set[str] = set()
+        for wf in workflow_paths:
+            try:
+                workflow_types |= extract_workflow_node_types(wf)
+            except Exception as exc:  # noqa: BLE001
+                print(f"Warning: could not parse '{wf}' for orphan matching: {exc}")
+        if not workflow_types:
+            return []
+
+        referenced: list[str] = []
+        for card in self._orphan_cards:
+            node_dir = os.path.join(CUSTOM_NODES_DIR, card.name)
+            if extract_types_from_node_dir(node_dir) & workflow_types:
+                referenced.append(card.name)
+        return referenced
 
     def _on_workflow_done(self, result: dict):
         """UI thread: add orphan cards for resolved repos, prompt for conflicts."""
@@ -773,9 +809,28 @@ class CustomNodeDeployerApp(QMainWindow):
         conflicts = result["conflicts"]
         unresolved = result["unresolved"]
         repo_to_desc: dict[str, str] = result.get("repo_to_desc", {})
+        referenced_orphans: list[str] = result.get("referenced_orphans", [])
+
+        # Orphan cards (installed-but-not-tracked nodes) referenced by the
+        # workflow are flipped into ADD_TO_CONFIG — the node is already on
+        # disk, so install isn't needed, only adding it to user_settings.
+        orphan_by_name = {card.name: card for card in self._orphan_cards}
+        promoted_orphans = 0
+        for orphan_name in referenced_orphans:
+            card = orphan_by_name.get(orphan_name)
+            if card is None or card.is_selected:
+                continue
+            card.is_selected = True
+            card.is_from_workflow = False
+            card.refresh()
+            print(f"'{orphan_name}' is installed but not tracked — marking for 'Add to config'.")
+            promoted_orphans += 1
+        if promoted_orphans:
+            self._refresh_install_btn()
 
         if not resolved and not conflicts and not unresolved:
-            print("Workflow only uses nodes already tracked — nothing to add.")
+            if promoted_orphans == 0:
+                print("Workflow only uses nodes already tracked — nothing to add.")
             return
 
         # Build a lookup of uninstalled tracked cards by normalised repo URL / basename
@@ -825,7 +880,8 @@ class CustomNodeDeployerApp(QMainWindow):
 
         print(
             f"Workflow scan complete: {len(resolved)} auto-resolved, "
-            f"{len(conflicts)} conflict(s), {len(unresolved)} unresolved."
+            f"{len(conflicts)} conflict(s), {len(unresolved)} unresolved, "
+            f"{promoted_orphans} orphan(s) to add to config."
         )
 
     def _refresh_install_btn(self):
@@ -877,7 +933,7 @@ class CustomNodeDeployerApp(QMainWindow):
         menu = QMenu(self)
         menu.setStyleSheet(theme.HAMBURGER_MENU_STYLE)
         action_from_url = QAction("Add from URL...", self)
-        action_from_workflow = QAction("Add from workflow...", self)
+        action_from_workflow = QAction("Add from workflow(s)...", self)
         menu.addAction(action_from_url)
         menu.addAction(action_from_workflow)
         action_from_url.triggered.connect(self._on_add_from_url)

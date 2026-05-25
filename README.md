@@ -47,7 +47,7 @@ Add nodes from the `+` button
 
 ### Adding nodes from a workflow
 
-`☰ → Add from workflow...` parses a ComfyUI workflow JSON, drops the built-in / already-installed node types, then queries the ComfyUI-Manager DB for the rest. Unambiguous matches are added as orphan cards automatically; types satisfied by multiple repos pop up a conflict picker:
+`☰ → Add from workflow(s)...` parses ComfyUI workflow(s) JSON, drops the built-in / already-installed node types, then queries the ComfyUI-Manager DB for the rest. Unambiguous matches are added as orphan cards automatically; types satisfied by multiple repos pop up a conflict picker:
 
 ![Workflow conflict dialog](docs/screenshots/workflow_conflict.png)
 

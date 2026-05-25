@@ -71,7 +71,7 @@ class OrphanNodeCard(BaseCard):
         if self.is_selected and self.is_from_workflow:
             return CardState.IMPORT
         if self.is_selected:
-            return CardState.ADD_TO_SETTINGS
+            return CardState.ADD_TO_CONFIG
         return CardState.MISSING
 
     def _on_requirements_toggled(self, checked: bool) -> None:
