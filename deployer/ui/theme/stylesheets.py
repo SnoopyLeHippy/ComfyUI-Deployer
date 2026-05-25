@@ -396,6 +396,37 @@ QCheckBox::indicator:checked:disabled {
 }
 """)
 
+RADIO_STYLE = _qss("""
+QRadioButton {
+    color: %(text_heading)s;
+    font-size: 14px;
+    spacing: 6px;
+}
+QRadioButton::indicator {
+    width: 14px;
+    height: 14px;
+    border: 1px solid %(surface_neutral)s;
+    border-radius: 7px;
+    background-color: %(surface_input)s;
+}
+QRadioButton::indicator:checked {
+    background-color: %(blue_badge)s;
+    border: 1px solid %(blue_badge)s;
+}
+QRadioButton::indicator:hover {
+    border: 1px solid %(text_muted)s;
+}
+""")
+
+SECTION_TITLE_STYLE = _qss(
+    "QLabel { color: %(text_heading)s; font-weight: bold; font-size: 14px; "
+    "text-transform: uppercase; letter-spacing: 1px; }"
+)
+
+RADIO_SUBTITLE_STYLE = _qss(
+    "QLabel { color: %(text_muted)s; font-size: 13px; }"
+)
+
 
 # ---------------------------------------------------------------------------
 # Console / Logs
