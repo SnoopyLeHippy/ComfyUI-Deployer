@@ -2,9 +2,10 @@
 
 A desktop app for managing custom nodes/intalls for [ComfyUI](https://github.com/Comfy-Org/ComfyUI/). 
 It allow to : 
+- Packages the configuration into a self-contained portable bundle.
+- Create single shareable self-installing `.bat`
 - Install custom nodes from any versions, commit or branch
 - Create and export custom nodes configuration 
-- Packages the configuration into a self-contained portable bundle.
 - Create a bundle from a comfyUi workflow. 
 - Update configuration from a ComfyUi workflow
 
@@ -15,7 +16,7 @@ It allow to :
 - **Visual node management** — each tracked node is shown as a card with its name, git ref, description, and a "Install requirements" toggle. Click a card to mark it for install / uninstall; cards turn orange when the ref drifts from what's on disk and need a re-checkout. Double click on ref allow you to change the custom node version.
 - **Orphan detection** — custom nodes installed inside `ComfyUI/custom_nodes/` but not present in configuration show up as orphan cards. Select them to promote them into the tracked list.
 - **Add from workflow** — point the app at a ComfyUI workflow JSON. It diffs the workflow's node types against built-in nodes + currently installed custom nodes, and resolves the rest against the ComfyUI-Manager DB. Ambiguous types are surfaced via a conflict dialog.
-- **Bundle export** — package a clean portable ComfyUI with only the custom nodes and models referenced by selected workflows (or everything currently installed). Missing nodes are auto-cloned into the bundle so it boots without any extra setup.
+- **Bundle export** — produce either a portable ComfyUI folder or a single shareable self-installing `.bat`. Optionally trim the output to only the custom nodes (and models, in folder mode) referenced by selected workflows. Missing nodes are auto-cloned so the result boots without any extra setup.
 - **Run ComfyUI** — start/stop the bundled ComfyUI subprocess from the app, with stdout/stderr piped into an integrated console panel.
 
 ## Quick start
@@ -53,11 +54,18 @@ Add nodes from the `+` button
 
 ### Creating a portable bundle
 
-`☰ → Create Bundle...` opens the bundle dialog. Pick a destination folder; optionally pick one or more workflow JSONs to trim the bundle to only what they need (custom nodes **and** models). When workflow files are provided, missing nodes are resolved against the ComfyUI-Manager DB and cloned directly into the bundle's `custom_nodes/`, so the resulting bundle is self-contained.
+`☰ → Create Bundle...` opens a 4-step wizard.
 
 ![Create bundle dialog](docs/screenshots/create_bundle.png)
 
-**Export as sharable `.bat` file** — instead of building a (potentially multi-gigabyte) bundle locally, this writes a single self-contained `install_comfyui_bundle.bat`. When the recipient double-clicks it, the script clones the ComfyUI Deployer, downloads the matching ComfyUI portable, installs `PyQt6` / `pyyaml` / `uv` into the embedded python, recreates `user_settings.json`, then clones the selected custom nodes and installs their requirements. **Models are never included** (too heavy). Tick **Export advanced settings** to also embed `extra_model_paths.yaml` and the advanced folder settings, so an external model library can be wired up on the target machine.
+1. **What do you want to create?** — choose the output format:
+   - **A single `.bat` file you can share** *(default)* — a small, self-installing script. On the recipient's machine, it clones the ComfyUI Deployer, downloads the matching ComfyUI portable, installs `PyQt6` / `pyyaml` / `uv` into the embedded python, recreates `user_settings.json`, then clones the selected custom nodes and installs their requirements. **Models are never embedded** in this mode.
+   - **A folder with everything inside** — a portable bundle that runs in place. Can include the models.
+2. **Destination** — pick the folder where the bundle (or the `.bat`) will be written.
+3. **Scope** *(optional)* — pick one or more workflow JSONs to trim the bundle to only what they need (custom nodes, and models if enabled). Missing workflow nodes are resolved against the ComfyUI-Manager DB and cloned directly into the bundle's `custom_nodes/`, so the resulting bundle is self-contained. Skip this step to bundle the full ComfyUI install.
+4. **Options** — the available options depend on the output format chosen at step 1:
+   - In **folder** mode: `Include models`, `Include the ComfyUI Deployer tool`, and — if step 3 was filled — `Copy the workflow files into the bundle`.
+   - In **`.bat`** mode: `Embed advanced settings` (writes `extra_model_paths.yaml` and the model/output/input overrides into the `.bat`, so an external model library can be wired up on the target machine), and — if step 3 was filled — `Embed the workflow files into the .bat`. ComfyUI Deployer is always included in this mode.
 
 
 ### Advanced settings
