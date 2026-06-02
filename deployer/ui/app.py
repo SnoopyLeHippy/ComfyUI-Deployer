@@ -248,7 +248,14 @@ class CustomNodeDeployerApp(QMainWindow):
 
     def _load_nodes(self):
         nodes = load_custom_nodes()
+        seen: dict[str, CustomNode] = {}
+        dropped: list[str] = []
         for node in nodes:
+            key = self._canonical_repo(node.repo)
+            if key in seen:
+                dropped.append(node.repo)
+                continue
+            seen[key] = node
             card = NodeCard(
                 node,
                 on_ref_saved=self._save_user_settings,
@@ -257,6 +264,10 @@ class CustomNodeDeployerApp(QMainWindow):
             )
             self.card_grid.add_card(card)
             self._node_cards.append(card)
+        if dropped:
+            for repo in dropped:
+                print(f"Warning: duplicate entry in user_settings.json dropped: {repo}")
+            self._save_user_settings()
         # Add '+' button at the end of the grid
         self.add_node_btn = AddNodeButton(self._on_add_node)
         self.card_grid.set_add_button(self.add_node_btn)
@@ -656,6 +667,7 @@ class CustomNodeDeployerApp(QMainWindow):
 
         loaded_entries = config.get("nodes", [])
         existing_by_repo = {self._canonical_repo(c.node.repo): c for c in self._node_cards}
+        existing_orphan_by_repo = {self._canonical_repo(c.repo): c for c in self._orphan_cards}
         loaded_keys: set[str] = set()
 
         update_count = 0
@@ -672,6 +684,15 @@ class CustomNodeDeployerApp(QMainWindow):
 
             card = existing_by_repo.get(key)
             if card is None:
+                orphan = existing_orphan_by_repo.get(key)
+                if orphan is not None:
+                    # Already on disk as an orphan → promote to a tracked card
+                    # so we don't end up with both an orphan and a new card for
+                    # the same repo.
+                    if new_ref != orphan.ref:
+                        update_count += 1
+                    self._promote_orphan_from_load(orphan, repo, new_ref, new_desc)
+                    continue
                 # Not tracked locally → create a fresh "To install" card.
                 self._add_imported_node(repo, new_ref, new_desc)
                 install_count += 1
@@ -739,6 +760,28 @@ class CustomNodeDeployerApp(QMainWindow):
         card.req_checkbox.blockSignals(True)
         card.req_checkbox.setChecked(True)
         card.req_checkbox.blockSignals(False)
+        card.refresh()
+        self.card_grid.add_card(card)
+        self._node_cards.append(card)
+
+    def _promote_orphan_from_load(self, orphan, repo: str, ref: str, description: str) -> None:
+        """Replace an orphan card with a tracked NodeCard during load-config.
+
+        The node is already on disk (that's why it was an orphan); if the loaded
+        ref differs from what's installed, mark the new card as pending update.
+        """
+        self.card_grid.remove_card(orphan)
+        if orphan in self._orphan_cards:
+            self._orphan_cards.remove(orphan)
+        node = CustomNode(repo, ref, description)
+        card = NodeCard(
+            node,
+            on_ref_saved=self._save_user_settings,
+            on_remove=self._on_remove_card,
+            on_selection_changed=self._refresh_install_btn,
+        )
+        if node.is_installed and ref != orphan.ref:
+            card.is_pending_update = True
         card.refresh()
         self.card_grid.add_card(card)
         self._node_cards.append(card)
