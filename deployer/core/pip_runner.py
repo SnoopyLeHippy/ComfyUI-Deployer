@@ -69,7 +69,7 @@ def _base_cmd(python_exe: str) -> tuple[list[str], str]:
     """Return (command prefix, human label) for the preferred installer."""
     if _uv_available(python_exe):
         return (
-            [python_exe, "-m", "uv", "pip", "install", "--python", python_exe],
+            [python_exe, "-m", "uv", "pip", "install", "--python", python_exe, "--no-build-isolation"],
             "uv pip install",
         )
     return (

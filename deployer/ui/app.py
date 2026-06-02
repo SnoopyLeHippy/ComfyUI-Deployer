@@ -1,10 +1,13 @@
 ﻿"""Main window for the ComfyUI Deployer."""
 
+import datetime
 import json
 import os
+import shlex
 import shutil
 import sys
 import threading
+import traceback
 
 from PyQt6.QtCore import QEvent, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QColor, QPainter
@@ -27,7 +30,7 @@ from PyQt6.QtWidgets import (
 )
 
 from deployer.bundle import create_bundle, create_sharable_bat
-from deployer.config import CUSTOM_NODES_DIR
+from deployer.config import CUSTOM_NODES_DIR, PROJECT_ROOT, PYTHON_EXE
 from deployer.core.comfy_runner import ComfyRunner
 from deployer.core.filesystem import force_remove_readonly
 from deployer.core.installer import (
@@ -35,6 +38,8 @@ from deployer.core.installer import (
     install_requirements,
     load_custom_nodes,
 )
+from deployer.core.package_repair import BrokenPackage, reinstall_packages
+from deployer.core.pip_runner import install_packages
 from deployer.core.junctions import is_junction
 from deployer.core.node import CustomNode
 from deployer.core.orphans import discover_orphan_nodes
@@ -53,7 +58,9 @@ from deployer.ui.dialogs import (
     AddNodeDialog,
     AdvancedSettingsDialog,
     CreateBundleDialog,
+    InstallPackageDialog,
     MissingNodesDialog,
+    PackageRepairDialog,
     WorkflowConflictDialog,
     apply_advanced_settings,
 )
@@ -66,6 +73,76 @@ from deployer.ui.widgets import (
     OrphanNodeCard,
     ResponsiveCardGrid,
 )
+
+
+LOG_FILE_PATH = os.path.join(PROJECT_ROOT, ".log")
+
+
+def _open_session_log():
+    """Open the session log file in write mode (truncates per launch).
+
+    Returns the file handle on success, ``None`` if it can't be opened. We
+    silently fall back to in-memory-only logging rather than refusing to
+    start: a missing log file shouldn't break the deployer itself.
+    """
+    try:
+        fh = open(LOG_FILE_PATH, "w", encoding="utf-8", buffering=1)
+    except OSError as exc:
+        print(f"Warning: could not open session log at {LOG_FILE_PATH}: {exc}",
+              file=sys.__stderr__)
+        return None
+    fh.write(
+        f"=== Deployer session started {datetime.datetime.now().isoformat()} ===\n"
+    )
+    fh.flush()
+    return fh
+
+
+def _install_excepthooks(log_file):
+    """Install sys.excepthook + threading.excepthook so uncaught exceptions
+    are appended to *log_file* with a full traceback.
+
+    PyQt6 propagates exceptions raised in slots/event handlers up through
+    sys.excepthook; without this, a crash in the repair dialog's worker
+    thread would only surface as "Unhandled Python exception" with no
+    traceback in the console widget (since stdout/stderr can be torn down
+    by then).
+    """
+    def _format(exc_type, exc_value, exc_tb) -> str:
+        return "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+
+    def _write(text: str) -> None:
+        if log_file is not None:
+            try:
+                log_file.write(text)
+                log_file.flush()
+            except (OSError, ValueError):
+                pass
+        # Always echo to the original stderr so the user sees something even
+        # if the redirected stderr has been torn down (window closing).
+        try:
+            sys.__stderr__.write(text)
+            sys.__stderr__.flush()
+        except (OSError, ValueError, AttributeError):
+            pass
+
+    def _hook(exc_type, exc_value, exc_tb):
+        header = (
+            f"\n=== Unhandled exception "
+            f"{datetime.datetime.now().isoformat()} ===\n"
+        )
+        _write(header + _format(exc_type, exc_value, exc_tb))
+
+    def _thread_hook(args):
+        header = (
+            f"\n=== Unhandled exception in thread "
+            f"{args.thread.name if args.thread else '<unknown>'} "
+            f"{datetime.datetime.now().isoformat()} ===\n"
+        )
+        _write(header + _format(args.exc_type, args.exc_value, args.exc_traceback))
+
+    sys.excepthook = _hook
+    threading.excepthook = _thread_hook
 
 
 class _ResizeHandle(QSplitterHandle):
@@ -148,16 +225,22 @@ class CustomNodeDeployerApp(QMainWindow):
         self.hamburger_menu = QMenu(self.menu_btn)
         self.hamburger_menu.setStyleSheet(theme.HAMBURGER_MENU_STYLE)
         self.action_settings = QAction("Advanced settings...", self)
+        self.action_repair_packages = QAction("Repair packages...", self)
+        self.action_install_package = QAction("Install package...", self)
         self.action_load_config = QAction("Load Configuration...", self)
         self.action_export_config = QAction("Export Configuration...", self)
         self.action_create_bundle = QAction("Create Bundle...", self)
         self.hamburger_menu.addAction(self.action_settings)
+        self.hamburger_menu.addAction(self.action_repair_packages)
+        self.hamburger_menu.addAction(self.action_install_package)
         self.hamburger_menu.addSeparator()
         self.hamburger_menu.addAction(self.action_load_config)
         self.hamburger_menu.addAction(self.action_export_config)
         self.hamburger_menu.addSeparator()
         self.hamburger_menu.addAction(self.action_create_bundle)
         self.action_settings.triggered.connect(self._on_advanced_settings)
+        self.action_repair_packages.triggered.connect(self._on_repair_packages)
+        self.action_install_package.triggered.connect(self._on_install_package)
         self.action_export_config.triggered.connect(self._on_export_config)
         self.action_load_config.triggered.connect(self._on_load_config)
         self.action_create_bundle.triggered.connect(self._on_create_bundle)
@@ -217,11 +300,20 @@ class CustomNodeDeployerApp(QMainWindow):
         btn_layout.addWidget(self.run_comfy_btn)
         main_layout.addWidget(btn_row)
 
-        # Redirect stdout/stderr — stderr lines render as errors (red).
+        # Redirect stdout/stderr — stderr lines render as errors (red) and
+        # everything is tee'd to a persistent log file at the project root so
+        # the user can ship it back to us when something blows up.
         self._orig_stdout = sys.stdout
         self._orig_stderr = sys.stderr
-        sys.stdout = StdoutRedirector(self.console)
-        sys.stderr = StdoutRedirector(self.console, is_error=True)
+        self._log_file = _open_session_log()
+        sys.stdout = StdoutRedirector(self.console, log_file=self._log_file)
+        sys.stderr = StdoutRedirector(self.console, is_error=True, log_file=self._log_file)
+        # Catch unhandled exceptions from any thread (including the dialog's
+        # check workers) so the traceback lands in the log file even when the
+        # default handler would just print to a defunct stream and exit.
+        _install_excepthooks(self._log_file)
+        if self._log_file is not None:
+            print(f"Session log: {self._log_file.name}")
 
         # Comfy process state signals
         self._comfy_started.connect(self._on_comfy_started)
@@ -324,6 +416,7 @@ class CustomNodeDeployerApp(QMainWindow):
         self.install_btn.setDisabled(busy)
         self.run_comfy_btn.setDisabled(busy)
         self.action_create_bundle.setEnabled(not busy)
+        self.action_repair_packages.setEnabled(not busy)
         if not busy:
             # Re-derive Update button state from the current card selection.
             self._refresh_install_btn()
@@ -408,6 +501,73 @@ class CustomNodeDeployerApp(QMainWindow):
         dialog = AdvancedSettingsDialog(UserSettings.load_settings(), self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             UserSettings.save_settings(dialog.applied_settings())
+
+    def _on_repair_packages(self):
+        """Open the Repair Packages dialog; reinstall selected packages in the background.
+
+        The dialog runs the read-only check passes itself; only the actual
+        reinstall (which deletes stray dirs and downloads wheels) locks the
+        main UI.
+        """
+        dialog = PackageRepairDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        selected = dialog.selected_packages()
+        if not selected:
+            return
+        self._set_busy(True)
+        threading.Thread(
+            target=self._run_reinstall_packages,
+            args=(selected,),
+            daemon=True,
+        ).start()
+
+    def _run_reinstall_packages(self, packages: list[BrokenPackage]) -> None:
+        try:
+            names = ", ".join(pkg.name for pkg in packages)
+            stray_count = sum(len(pkg.stray_dirs) for pkg in packages)
+            print(
+                f"Reinstalling {len(packages)} package(s): {names} "
+                f"({stray_count} stray dir(s) to remove first)"
+            )
+            rc = reinstall_packages(PYTHON_EXE, packages)
+            if rc == 0:
+                print("Repair complete.")
+            else:
+                print(f"Repair finished with non-zero exit code: {rc}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"Error during reinstall: {exc}")
+        finally:
+            self._clear_busy()
+
+    def _on_install_package(self):
+        """Open the Install Package dialog and run installation in the background."""
+        dialog = InstallPackageDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        spec = dialog.package_spec()
+        if not spec:
+            return
+        self._set_busy(True)
+        threading.Thread(
+            target=self._run_install_package,
+            args=(spec,),
+            daemon=True,
+        ).start()
+
+    def _run_install_package(self, spec: str) -> None:
+        try:
+            args = shlex.split(spec)
+            print(f"Installing package: {spec}")
+            rc = install_packages(PYTHON_EXE, args)
+            if rc == 0:
+                print("Package installed successfully.")
+            else:
+                print(f"Installation finished with non-zero exit code: {rc}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"Error during package installation: {exc}")
+        finally:
+            self._clear_busy()
 
     def _on_create_bundle(self):
         """Open the Create Bundle dialog and run bundle creation in a background thread.
@@ -1063,6 +1223,14 @@ class CustomNodeDeployerApp(QMainWindow):
         self._comfy_runner.stop()
         sys.stdout = self._orig_stdout
         sys.stderr = self._orig_stderr
+        if self._log_file is not None:
+            try:
+                self._log_file.write(
+                    f"=== Deployer session ended {datetime.datetime.now().isoformat()} ===\n"
+                )
+                self._log_file.close()
+            except (OSError, ValueError):
+                pass
         event.accept()
 
 

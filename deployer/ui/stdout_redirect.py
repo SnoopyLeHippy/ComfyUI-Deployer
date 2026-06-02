@@ -1,6 +1,8 @@
 """Forward writes from ``sys.stdout`` / ``sys.stderr`` to the console widget."""
 
 import io
+import threading
+from typing import IO, Optional
 
 from PyQt6.QtCore import Q_ARG, QMetaObject, Qt
 
@@ -16,13 +18,28 @@ class StdoutRedirector(io.TextIOBase):
 
     *is_error* marks a stream whose every line should render as an error —
     used for ``sys.stderr`` so tracebacks show up red regardless of content.
+
+    *log_file* is an open text-mode file handle (shared across redirectors so
+    stdout and stderr land in the same file). Each line is written there
+    immediately and flushed so a hard crash still leaves the bytes on disk.
+    Guarded by a class-level lock since both redirectors write to the same
+    file from multiple threads.
     """
 
-    def __init__(self, console, *, is_error: bool = False):
+    _LOG_LOCK = threading.Lock()
+
+    def __init__(
+        self,
+        console,
+        *,
+        is_error: bool = False,
+        log_file: Optional[IO[str]] = None,
+    ):
         super().__init__()
         self._console = console
         self._is_error = is_error
         self._buffer = ""
+        self._log_file = log_file
 
     def write(self, text: str) -> int:
         if not text:
@@ -34,6 +51,7 @@ class StdoutRedirector(io.TextIOBase):
                 break
             line, self._buffer = self._buffer[: idx + 1], self._buffer[idx + 1:]
             self._emit(line)
+            self._log(line)
         return len(text)
 
     def _emit(self, line: str) -> None:
@@ -44,8 +62,22 @@ class StdoutRedirector(io.TextIOBase):
             Q_ARG(bool, self._is_error),
         )
 
+    def _log(self, line: str) -> None:
+        if self._log_file is None:
+            return
+        prefix = "[ERR] " if self._is_error else ""
+        with self._LOG_LOCK:
+            try:
+                self._log_file.write(prefix + line)
+                self._log_file.flush()
+            except (OSError, ValueError):
+                # File may have been closed during shutdown; swallow rather
+                # than throw on the way out.
+                pass
+
     def flush(self) -> None:
         # Flush any trailing partial line (e.g. a prompt with no newline).
         if self._buffer:
             self._emit(self._buffer)
+            self._log(self._buffer)
             self._buffer = ""

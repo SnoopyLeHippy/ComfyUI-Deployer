@@ -3,6 +3,7 @@ __pycache__
 .env
 .cache
 .vscode
+.log
 
 ComfyUI_windows_portable*
 torch*
