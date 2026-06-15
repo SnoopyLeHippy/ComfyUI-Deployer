@@ -38,6 +38,23 @@ class StepPhase(enum.Flag):
     BOTH = CREATE | INSTALL
 
 
+class BundleFormat(enum.Flag):
+    """Which bundle output format a step applies to.
+
+    * ``BAT``    — sharable ``.bat`` installer (INSTALL phase on recipient machine).
+    * ``FOLDER`` — portable folder bundle (CREATE phase on author machine).
+    * ``BOTH``   — the step is relevant for both formats (default).
+
+    Set :attr:`BundleStep.bundle_formats` to restrict a step to a specific
+    format so it is hidden in the Add-step menu and skipped at runtime when
+    the format doesn't match.
+    """
+
+    BAT = enum.auto()
+    FOLDER = enum.auto()
+    BOTH = BAT | FOLDER
+
+
 @dataclass
 class StepContext:
     """Runtime paths and helpers handed to :meth:`BundleStep.run`.
@@ -55,6 +72,7 @@ class StepContext:
         output_dir:       Path to ComfyUI/output/ inside the bundle.
         phase:            :attr:`StepPhase.CREATE` (author's machine) or
                           :attr:`StepPhase.INSTALL` (recipient's machine).
+        bundle_format:    :attr:`BundleFormat.FOLDER` or :attr:`BundleFormat.BAT`.
         workflow_paths:   Absolute paths to the workflow files selected by the
                           author (empty list when no scope was set).
         model_refs:       Set of model filenames / directory names extracted from
@@ -70,6 +88,7 @@ class StepContext:
     input_dir: str
     output_dir: str
     phase: StepPhase
+    bundle_format: BundleFormat = BundleFormat.BOTH
     workflow_paths: list[str] = field(default_factory=list)
     model_refs: set[str] = field(default_factory=set)
     log: Callable[[str], None] = print
@@ -108,6 +127,9 @@ class BundleStep:
     description: str = ""
     #: Phase(s) the step opts into.
     phases: StepPhase = StepPhase.INSTALL
+    #: Bundle format(s) the step applies to. Controls visibility in the
+    #: Add-step menu and skips execution when the format doesn't match.
+    bundle_formats: BundleFormat = BundleFormat.BOTH
 
     # -- Configuration UI (optional) ---------------------------------------
     # These run only inside the Create Bundle dialog, where PyQt is loaded.

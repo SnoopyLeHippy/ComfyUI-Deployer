@@ -10,7 +10,7 @@ See :mod:`deployer.plugins.api` for how to write a plugin, and
 ``deployer/plugins/examples/`` for a worked reference.
 """
 
-from deployer.plugins.api import BundleStep, StepContext, StepPhase  # noqa: F401
+from deployer.plugins.api import BundleFormat, BundleStep, StepContext, StepPhase  # noqa: F401
 from deployer.plugins.registry import (  # noqa: F401
     PluginRegistry,
     load_plugins,

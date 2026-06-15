@@ -37,7 +37,7 @@ from PyQt6.QtWidgets import (
 )
 
 from deployer.config import PROJECT_ROOT
-from deployer.plugins import load_plugins, registry
+from deployer.plugins import BundleFormat, load_plugins, registry
 from deployer.plugins.registry import _repo_dir_name
 from deployer.settings import UserSettings
 from deployer.ui import theme
@@ -413,7 +413,8 @@ class CreateBundleDialog(QDialog):
     def _show_add_step_menu(self):
         menu = QMenu(self)
         menu.setToolTipsVisible(True)
-        plugins = registry.all()
+        current_format = BundleFormat.BAT if self._bat_radio.isChecked() else BundleFormat.FOLDER
+        plugins = [s for s in registry.all() if s.bundle_formats & current_format]
         if not plugins:
             action = menu.addAction("No step plugins installed")
             action.setEnabled(False)

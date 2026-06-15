@@ -26,7 +26,7 @@ from deployer.config import (
     MODELS_DIR,
     PROJECT_ROOT,
 )
-from deployer.plugins import StepContext, StepPhase, load_plugins, run_steps
+from deployer.plugins import BundleFormat, StepContext, StepPhase, load_plugins, run_steps
 from deployer.core.filesystem import force_remove_readonly
 from deployer.core.junctions import read_junction_target
 from deployer.settings import UserSettings
@@ -243,6 +243,7 @@ def create_bundle(
             input_dir=os.path.join(dst_comfyui, "input"),
             output_dir=os.path.join(dst_comfyui, "output"),
             phase=StepPhase.CREATE,
+            bundle_format=BundleFormat.FOLDER,
             workflow_paths=workflow_paths,
             model_refs=model_refs,
         )

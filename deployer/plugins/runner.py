@@ -38,6 +38,8 @@ def run_steps(steps: list[dict], ctx: StepContext) -> None:
             continue
         if not (step.phases & ctx.phase):
             continue
+        if not (step.bundle_formats & ctx.bundle_format):
+            continue
 
         error = step.validate(config)
         if error:

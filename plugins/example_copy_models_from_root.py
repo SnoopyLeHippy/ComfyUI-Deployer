@@ -22,7 +22,7 @@
 # import os
 # import shutil
 #
-# from deployer.plugins import BundleStep, StepContext, StepPhase
+# from deployer.plugins import BundleFormat, BundleStep, StepContext, StepPhase
 #
 #
 # class CopyModelsFromRootStep(BundleStep):
@@ -30,6 +30,7 @@
 #     name = "Copy models from a root folder"
 #     description = "Recursively copy a folder's contents into the bundle's models/ directory."
 #     phases = StepPhase.BOTH  # CREATE (author machine) and INSTALL (recipient machine)
+#     bundle_formats = BundleFormat.BOTH  # BundleFormat.BAT, BundleFormat.FOLDER, or BundleFormat.BOTH
 #
 #     # -- Configuration UI ---------------------------------------------
 #     def build_widget(self, parent=None):

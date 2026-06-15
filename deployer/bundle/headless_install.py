@@ -30,7 +30,7 @@ from deployer.config import (
     PROJECT_ROOT,
     PYTHON_EXE,
 )
-from deployer.plugins import StepContext, StepPhase, load_plugins, run_steps, sync_remote_plugins
+from deployer.plugins import BundleFormat, StepContext, StepPhase, load_plugins, run_steps, sync_remote_plugins
 from deployer.settings import UserSettings
 
 
@@ -84,6 +84,7 @@ def run() -> None:
             input_dir=INPUT_DIR,
             output_dir=OUTPUT_DIR,
             phase=StepPhase.INSTALL,
+            bundle_format=BundleFormat.BAT,
         )
         run_steps(steps, ctx)
 
