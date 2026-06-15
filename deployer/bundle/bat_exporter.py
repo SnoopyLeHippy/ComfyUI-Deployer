@@ -29,6 +29,7 @@ from deployer.bundle.workflow_parser import (
     find_custom_node_dirs_for_types,
 )
 from deployer.bundle.project_copier import collect_node_metadata
+from deployer.core.workflow_io import load_workflow_graph
 from deployer.config import (
     CUSTOM_NODES_DIR,
     EXTRA_MODEL_PATHS_YAML,
@@ -120,17 +121,54 @@ def _build_plugins_tarball_b64(plugin_paths: list[str]) -> str | None:
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
+def _unique_arcname(name: str, used: set[str]) -> str:
+    """Return *name*, suffixing ``_2``/``_3``/... if it already collides in *used*."""
+    if name not in used:
+        used.add(name)
+        return name
+    stem, ext = os.path.splitext(name)
+    i = 2
+    while f"{stem}_{i}{ext}" in used:
+        i += 1
+    unique = f"{stem}_{i}{ext}"
+    used.add(unique)
+    return unique
+
+
 def _build_workflows_tarball_b64(workflow_paths: list[str]) -> str:
     """Pack workflow files into an uncompressed in-memory tar, base64-encoded.
+
+    Image-workflows (PNG/WebP/JPEG that carry the graph in their metadata) are
+    converted to the bare workflow ``.json`` before packing, so the heavy image
+    payload is never embedded in the .bat — only the lightweight graph the
+    recipient actually needs (ComfyUI loads a ``.json`` by drag-and-drop just
+    like an image). Raw ``.json`` workflows are packed unchanged. If a graph
+    can't be extracted from an image, the raw file is embedded as a fallback so
+    nothing is silently dropped.
 
     The tar is extracted into a ``workflows/`` folder by the .bat at install
     time. Using a tarball avoids per-file batch-escaping pitfalls for filenames
     with spaces or unicode characters.
     """
     buf = io.BytesIO()
+    used: set[str] = set()
     with tarfile.open(fileobj=buf, mode="w") as tar:
         for wf in workflow_paths:
-            tar.add(wf, arcname=os.path.basename(wf))
+            base = os.path.basename(wf)
+            if os.path.splitext(wf)[1].lower() == ".json":
+                tar.add(wf, arcname=_unique_arcname(base, used))
+                continue
+            try:
+                graph = load_workflow_graph(wf)
+            except (ValueError, OSError) as exc:
+                print(f"  Could not extract workflow from {base} ({exc}); embedding the raw file.")
+                tar.add(wf, arcname=_unique_arcname(base, used))
+                continue
+            payload = json.dumps(graph, ensure_ascii=False).encode("utf-8")
+            stem = os.path.splitext(base)[0]
+            info = tarfile.TarInfo(name=_unique_arcname(stem + ".json", used))
+            info.size = len(payload)
+            tar.addfile(info, io.BytesIO(payload))
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
@@ -139,10 +177,19 @@ def _emit_b64(lines: list[str], blob: str, tmp_name: str, out_literal: str) -> N
 
     *out_literal* is a python string literal (already quoted) naming the target,
     e.g. ``"'user_settings.json'"``. b64decode discards the CRLFs echo inserts.
+
+    The chunks are wrapped in a single ``( ... ) > file`` block so cmd opens the
+    temp file *once*, instead of re-opening and re-closing it for every ``>>``
+    append. For multi-MB blobs (e.g. embedded image-workflows) the per-line
+    open/close churn dominated runtime — this makes reconstruction near-instant.
+    The standard base64 alphabet has no cmd-special characters, so plain ``echo``
+    inside the block is safe.
     """
     lines.append(f"del {tmp_name} 2>nul")
+    lines.append("(")
     for i in range(0, len(blob), _CHUNK):
-        lines.append(f">>{tmp_name} echo {blob[i:i + _CHUNK]}")
+        lines.append(f"echo {blob[i:i + _CHUNK]}")
+    lines.append(f")>{tmp_name}")
     lines.append(
         f'%PYTHON_EXEC% -c "import base64;'
         f"open({out_literal},'wb').write(base64.b64decode(open('{tmp_name}','rb').read()))\""
