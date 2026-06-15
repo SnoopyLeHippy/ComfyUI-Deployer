@@ -47,13 +47,19 @@ _REMOTE_PLUGINS_DIR = os.path.join(_LOCAL_PLUGINS_DIR, "remote")
 
 
 def _local_plugin_files() -> list[str]:
-    """Return sorted .py filenames in plugins/ (excluding underscore files)."""
-    if not os.path.isdir(_LOCAL_PLUGINS_DIR):
-        return []
-    return sorted(
-        f for f in os.listdir(_LOCAL_PLUGINS_DIR)
-        if f.endswith(".py") and not f.startswith("_")
-    )
+    """Return sorted .py filenames in plugins/ and plugins/remote/ (excluding underscore files)."""
+    result = []
+    if os.path.isdir(_LOCAL_PLUGINS_DIR):
+        result.extend(
+            f for f in os.listdir(_LOCAL_PLUGINS_DIR)
+            if f.endswith(".py") and not f.startswith("_")
+        )
+    if os.path.isdir(_REMOTE_PLUGINS_DIR):
+        result.extend(
+            f"remote/{f}" for f in os.listdir(_REMOTE_PLUGINS_DIR)
+            if f.endswith(".py") and not f.startswith("_")
+        )
+    return sorted(result)
 
 
 _STEP_TITLES = [

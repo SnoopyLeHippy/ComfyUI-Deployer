@@ -196,6 +196,8 @@ def load_plugins(force: bool = False) -> PluginRegistry:
             subdir = os.path.join(_USER_DIR, name)
             if os.path.isdir(subdir) and subdir != _REMOTE_DIR:
                 _discover_dir(subdir)
+    # Scan .py files placed directly in plugins/remote/ (not inside a repo subdir).
+    _discover_dir(_REMOTE_DIR)
     # Each subdirectory of plugins/remote/ is itself a plugin repo — scan it.
     if os.path.isdir(_REMOTE_DIR):
         for name in sorted(os.listdir(_REMOTE_DIR)):
