@@ -45,6 +45,22 @@ class StepContext:
     The paths always point at the ComfyUI tree the step should act on: the
     freshly built bundle during :attr:`StepPhase.CREATE`, or the recipient's
     live install during :attr:`StepPhase.INSTALL`.
+
+    Attributes:
+        bundle_root:      Root of the export destination (parent of ComfyUI_windows_portable/).
+        comfyui_dir:      Path to the ComfyUI/ folder inside the bundle.
+        models_dir:       Path to ComfyUI/models/ inside the bundle.
+        custom_nodes_dir: Path to ComfyUI/custom_nodes/ inside the bundle.
+        input_dir:        Path to ComfyUI/input/ inside the bundle.
+        output_dir:       Path to ComfyUI/output/ inside the bundle.
+        phase:            :attr:`StepPhase.CREATE` (author's machine) or
+                          :attr:`StepPhase.INSTALL` (recipient's machine).
+        workflow_paths:   Absolute paths to the workflow files selected by the
+                          author (empty list when no scope was set).
+        model_refs:       Set of model filenames / directory names extracted from
+                          the selected workflows (e.g. ``{"v1-5-pruned.safetensors"}``).
+                          Empty when no workflows were selected or none referenced models.
+        log:              Callable to emit a progress message to the UI console.
     """
 
     bundle_root: str
@@ -55,6 +71,7 @@ class StepContext:
     output_dir: str
     phase: StepPhase
     workflow_paths: list[str] = field(default_factory=list)
+    model_refs: set[str] = field(default_factory=set)
     log: Callable[[str], None] = print
 
 

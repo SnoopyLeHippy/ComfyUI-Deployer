@@ -244,6 +244,7 @@ def create_bundle(
             output_dir=os.path.join(dst_comfyui, "output"),
             phase=StepPhase.CREATE,
             workflow_paths=workflow_paths,
+            model_refs=model_refs,
         )
         run_steps(steps, ctx)
 
