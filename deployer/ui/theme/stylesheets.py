@@ -427,6 +427,18 @@ RADIO_SUBTITLE_STYLE = _qss(
     "QLabel { color: %(text_muted)s; font-size: 13px; }"
 )
 
+# Framed container for a single configured bundle step in the Create Bundle dialog.
+STEP_CARD_STYLE = _qss("""
+QFrame#stepCard {
+    background-color: %(surface_input)s;
+    border-radius: 8px;
+    border: 1px solid %(surface_border)s;
+}
+QFrame#stepCard QLabel {
+    background-color: transparent;
+}
+""")
+
 
 # ---------------------------------------------------------------------------
 # Console / Logs

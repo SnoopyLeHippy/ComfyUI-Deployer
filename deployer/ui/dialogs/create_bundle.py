@@ -21,22 +21,37 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QDialog,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
+    QMessageBox,
     QPushButton,
     QRadioButton,
+    QScrollArea,
     QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from deployer.plugins import load_plugins, registry
 from deployer.ui import theme
 
 
-_STEP_TITLES = ["What do you want to create?", "Destination", "Scope (optional)", "Options"]
+_STEP_TITLES = [
+    "What do you want to create?",
+    "Destination",
+    "Scope (optional)",
+    "Options",
+    "Install steps (optional)",
+]
 _NUM_STEPS = len(_STEP_TITLES)
+
+# Page indices that carry behaviour beyond plain navigation.
+_OPTIONS_PAGE = 3
+_STEPS_PAGE = 4
 
 # Local +2px overrides on shared theme styles, so this dialog's typography
 # can grow without changing how other dialogs/widgets render.
@@ -56,6 +71,10 @@ class CreateBundleDialog(QDialog):
 
         self._dest_path = ""
         self._wf_paths: list[str] = []
+        # Each entry: {"step": BundleStep, "widget": QWidget, "container": QWidget}
+        self._step_rows: list[dict] = []
+        # Populate the plugin registry once so the Add-step menu can list them.
+        load_plugins()
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(20, 16, 20, 16)
@@ -75,6 +94,7 @@ class CreateBundleDialog(QDialog):
         self._pages.addWidget(self._build_destination_page())
         self._pages.addWidget(self._build_scope_page())
         self._pages.addWidget(self._build_options_page())
+        self._pages.addWidget(self._build_steps_page())
         outer.addWidget(self._pages, 1)
 
         outer.addSpacing(10)
@@ -253,6 +273,104 @@ class CreateBundleDialog(QDialog):
         v.addStretch()
         return page
 
+    def _build_steps_page(self) -> QWidget:
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setContentsMargins(0, 6, 0, 0)
+        v.setSpacing(8)
+
+        v.addWidget(self._help_label(
+            "Add custom install steps contributed by plugins. Each step runs "
+            "at bundle creation and/or on the recipient's machine, depending "
+            "on the plugin."
+        ))
+
+        add_row = QHBoxLayout()
+        self._add_step_btn = QPushButton("＋ Add step")
+        self._add_step_btn.setStyleSheet(theme.BROWSE_BUTTON_STYLE)
+        self._add_step_btn.setFixedHeight(30)
+        self._add_step_btn.clicked.connect(self._show_add_step_menu)
+        add_row.addWidget(self._add_step_btn)
+        add_row.addStretch()
+        v.addLayout(add_row)
+
+        # Scrollable list of configured step rows.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._steps_container = QWidget()
+        self._steps_vbox = QVBoxLayout(self._steps_container)
+        self._steps_vbox.setContentsMargins(0, 0, 0, 0)
+        self._steps_vbox.setSpacing(8)
+        self._steps_empty_lbl = QLabel("No steps added.")
+        self._steps_empty_lbl.setStyleSheet(theme.HELP_TEXT_STYLE)
+        self._steps_vbox.addWidget(self._steps_empty_lbl)
+        self._steps_vbox.addStretch()
+        scroll.setWidget(self._steps_container)
+        v.addWidget(scroll, 1)
+        return page
+
+    # ----------------------------------------------------- Dynamic steps
+    def _show_add_step_menu(self):
+        menu = QMenu(self)
+        menu.setToolTipsVisible(True)
+        plugins = registry.all()
+        if not plugins:
+            action = menu.addAction("No step plugins installed")
+            action.setEnabled(False)
+        else:
+            for step in plugins:
+                action = menu.addAction(step.name or step.id)
+                if step.description:
+                    action.setToolTip(step.description)
+                action.triggered.connect(lambda _=False, s=step: self._add_step_row(s))
+        menu.exec(self._add_step_btn.mapToGlobal(self._add_step_btn.rect().bottomLeft()))
+
+    def _add_step_row(self, step) -> None:
+        self._steps_empty_lbl.setVisible(False)
+
+        container = QFrame()
+        container.setObjectName("stepCard")
+        container.setStyleSheet(theme.STEP_CARD_STYLE)
+        box = QVBoxLayout(container)
+        box.setContentsMargins(10, 8, 10, 10)
+        box.setSpacing(4)
+
+        header = QHBoxLayout()
+        title = QLabel(step.name or step.id)
+        title.setStyleSheet(theme.SECTION_TITLE_STYLE)
+        header.addWidget(title)
+        header.addStretch()
+        remove = QPushButton("✕")
+        remove.setFixedWidth(28)
+        remove.setStyleSheet(theme.CLEAR_BUTTON_NO_DISABLED_STYLE)
+        header.addWidget(remove)
+        box.addLayout(header)
+
+        if step.description:
+            sub = QLabel(step.description)
+            sub.setStyleSheet(theme.RADIO_SUBTITLE_STYLE)
+            sub.setWordWrap(True)
+            box.addWidget(sub)
+
+        config_widget = step.build_widget(container)
+        if config_widget is not None:
+            box.addWidget(config_widget)
+
+        # Insert before the trailing stretch (last item in the vbox).
+        self._steps_vbox.insertWidget(self._steps_vbox.count() - 1, container)
+
+        row = {"step": step, "widget": config_widget, "container": container}
+        self._step_rows.append(row)
+        remove.clicked.connect(lambda: self._remove_step_row(row))
+
+    def _remove_step_row(self, row: dict) -> None:
+        row["container"].setParent(None)
+        row["container"].deleteLater()
+        self._step_rows.remove(row)
+        if not self._step_rows:
+            self._steps_empty_lbl.setVisible(True)
+
     # ------------------------------------------------------------- Footer
     def _build_footer(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -327,7 +445,7 @@ class CreateBundleDialog(QDialog):
         self._next_btn.setText("Create" if last else "Next →")
         # When landing on Options, re-evaluate dynamic visibility (safe even
         # though the same hooks have already fired on widget changes).
-        if last:
+        if index == _OPTIONS_PAGE:
             self._refresh_options_visibility()
             self._refresh_workflow_dependent_widgets()
         self._update_next_enabled()
@@ -342,10 +460,21 @@ class CreateBundleDialog(QDialog):
     def _on_next(self):
         idx = self._pages.currentIndex()
         if idx == _NUM_STEPS - 1:
-            if self._dest_path:
+            if self._dest_path and self._validate_steps():
                 self.accept()
         else:
             self._goto(idx + 1)
+
+    def _validate_steps(self) -> bool:
+        """Validate every configured step; report the first error and block."""
+        for row in self._step_rows:
+            step = row["step"]
+            config = step.read_config(row["widget"]) if row["widget"] is not None else {}
+            error = step.validate(config)
+            if error:
+                QMessageBox.warning(self, f"Invalid step: {step.name}", error)
+                return False
+        return True
 
     def _on_back(self):
         idx = self._pages.currentIndex()
@@ -410,3 +539,16 @@ class CreateBundleDialog(QDialog):
 
     def include_workflows(self) -> bool:
         return bool(self._wf_paths) and self._include_workflows_cb.isChecked()
+
+    def steps(self) -> list[dict]:
+        """Return the configured bundle steps as ``[{"id", "config"}, ...]``.
+
+        Reads each step's current config out of its widget. Call only after the
+        dialog is accepted (config has been validated by :meth:`_validate_steps`).
+        """
+        result: list[dict] = []
+        for row in self._step_rows:
+            step = row["step"]
+            config = step.read_config(row["widget"]) if row["widget"] is not None else {}
+            result.append({"id": step.id, "config": config})
+        return result

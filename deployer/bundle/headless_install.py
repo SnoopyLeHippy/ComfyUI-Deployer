@@ -21,7 +21,16 @@ from deployer.bundle.node_cloner import (
     clone_node_into_bundle,
     install_bundle_requirements,
 )
-from deployer.config import CUSTOM_NODES_DIR, PYTHON_EXE
+from deployer.config import (
+    COMFYUI_DIR,
+    CUSTOM_NODES_DIR,
+    INPUT_DIR,
+    MODELS_DIR,
+    OUTPUT_DIR,
+    PROJECT_ROOT,
+    PYTHON_EXE,
+)
+from deployer.plugins import StepContext, StepPhase, load_plugins, run_steps
 from deployer.settings import UserSettings
 
 
@@ -53,6 +62,24 @@ def run() -> None:
 
         print("Applying folder settings...")
         apply_folder_junctions(settings)
+
+    # --- Run INSTALL-phase bundle steps (plugins) ---
+    # These act on the recipient's freshly installed ComfyUI (e.g. copy models
+    # from a path that exists on the target PC). Plugin modules ship with the
+    # cloned deployer, so committed plugins are available here.
+    steps = UserSettings.load_steps()
+    if steps:
+        load_plugins()
+        ctx = StepContext(
+            bundle_root=PROJECT_ROOT,
+            comfyui_dir=COMFYUI_DIR,
+            models_dir=MODELS_DIR,
+            custom_nodes_dir=CUSTOM_NODES_DIR,
+            input_dir=INPUT_DIR,
+            output_dir=OUTPUT_DIR,
+            phase=StepPhase.INSTALL,
+        )
+        run_steps(steps, ctx)
 
     print("Headless install complete.")
 

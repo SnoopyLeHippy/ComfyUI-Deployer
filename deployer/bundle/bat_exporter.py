@@ -273,6 +273,7 @@ def create_sharable_bat(
     export_advanced: bool = False,
     extra_repos: list[tuple[str, str]] | None = None,
     include_workflows: bool = False,
+    steps: list[dict] | None = None,
 ) -> str:
     """Generate the sharable install ``.bat`` at *dest_dir*; return its path.
 
@@ -283,6 +284,10 @@ def create_sharable_bat(
     ``extra_model_paths.yaml`` are embedded. When *include_workflows* is set,
     the *workflow_paths* files are tarred and embedded; the .bat extracts them
     into a ``workflows/`` folder next to itself at install time.
+
+    *steps* (configured bundle-step plugins) are embedded in the
+    ``user_settings.json``; the headless install replays the INSTALL-phase ones
+    on the recipient's machine.
     """
     repo_url = git_ops.get_remote_url(PROJECT_ROOT)
     if not repo_url:
@@ -295,6 +300,10 @@ def create_sharable_bat(
     nodes = _build_node_list(workflow_paths, extra_repos)
 
     data: dict = {"nodes": nodes}
+    if steps:
+        # Persisted as-is; the headless install replays the INSTALL-phase ones
+        # on the recipient's machine (plugin modules ship with the cloned deployer).
+        data["steps"] = steps
     extra_yaml_b64: str | None = None
     if export_advanced:
         settings = UserSettings.load_settings()

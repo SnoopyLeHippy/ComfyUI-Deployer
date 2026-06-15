@@ -13,7 +13,11 @@ on-disk schema is owned by a single module. The file format is::
             "model_folder": ...,
             "output_folder": ...,
             "input_folder": ...
-        }
+        },
+        "steps": [                   # optional, configured bundle-step plugins
+            {"id": ..., "config": {...}},
+            ...
+        ]
     }
 
 Two write modes:
@@ -65,6 +69,16 @@ class UserSettings:
         """
         with open(cls.PATH, "w", encoding="utf-8") as fh:
             json.dump({"nodes": nodes}, fh, indent=4, ensure_ascii=False)
+
+    @classmethod
+    def load_steps(cls) -> list[dict]:
+        """Return the configured bundle steps, or ``[]`` if absent.
+
+        Each entry is ``{"id": <plugin id>, "config": {...}}``. Written into a
+        bundle's ``user_settings.json`` at creation time and replayed by the
+        plugin runner during the install phase.
+        """
+        return cls.load_raw().get("steps", [])
 
     @classmethod
     def load_settings(cls) -> dict:

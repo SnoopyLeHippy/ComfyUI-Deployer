@@ -103,14 +103,21 @@ def collect_node_metadata(
     return nodes
 
 
-def write_bundle_user_settings(dest_dir: str, bundle_cn_dir: str) -> None:
+def write_bundle_user_settings(
+    dest_dir: str, bundle_cn_dir: str, steps: list[dict] | None = None
+) -> None:
     """Generate the bundle's ``user_settings.json`` at *dest_dir*.
 
     Contains only the nodes whose clone folder exists inside *bundle_cn_dir*.
-    Run after the custom nodes have been cloned into the bundle.
+    Run after the custom nodes have been cloned into the bundle. When *steps*
+    is given, the configured bundle steps are persisted too so the bundled
+    deployer can replay the install-phase ones on the recipient's machine.
     """
     bundle_nodes = collect_node_metadata(bundle_cn_dir)
+    data: dict = {"nodes": bundle_nodes}
+    if steps:
+        data["steps"] = steps
     dst_settings = os.path.join(dest_dir, "user_settings.json")
     with open(dst_settings, "w", encoding="utf-8") as fh:
-        json.dump({"nodes": bundle_nodes}, fh, indent=4, ensure_ascii=False)
+        json.dump(data, fh, indent=4, ensure_ascii=False)
     print(f"Wrote user_settings.json with {len(bundle_nodes)} node(s) to {dest_dir}")

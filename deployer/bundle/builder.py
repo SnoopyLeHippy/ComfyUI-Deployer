@@ -25,6 +25,7 @@ from deployer.config import (
     EXTRA_MODEL_PATHS_YAML,
     MODELS_DIR,
 )
+from deployer.plugins import StepContext, StepPhase, load_plugins, run_steps
 from deployer.core.filesystem import force_remove_readonly
 from deployer.core.junctions import read_junction_target
 from deployer.settings import UserSettings
@@ -43,6 +44,7 @@ def create_bundle(
     include_models: bool = False,
     *,
     include_workflows: bool = False,
+    steps: list[dict] | None = None,
 ) -> None:
     """Create a clean portable ComfyUI bundle at *dest_dir*.
 
@@ -62,6 +64,12 @@ def create_bundle(
 
     When *include_workflows* is set, the files in *workflow_paths* are copied
     into a ``workflows/`` folder at the export root.
+
+    *steps* is the list of configured bundle-step plugins
+    (``{"id", "config"}`` entries). Their ``CREATE``-phase steps run here against
+    the freshly built bundle; the full list is persisted into the bundle's
+    ``user_settings.json`` (when the deployer is included) so install-phase
+    steps can be replayed on the recipient's machine.
     """
     src_custom_nodes = CUSTOM_NODES_DIR
     src_models = _resolve_junction(MODELS_DIR)
@@ -159,11 +167,29 @@ def create_bundle(
             shutil.copytree(src_models, dst_models, dirs_exist_ok=True)
     # Otherwise keep the default (empty) models dir from the fresh download.
 
+    # --- Step 6b: Run CREATE-phase bundle steps (plugins) ---
+    # These act on the freshly built bundle on the author's machine (e.g. copy
+    # extra models in now). INSTALL-phase steps are skipped here and replayed
+    # later on the recipient via the persisted user_settings.json.
+    if steps:
+        load_plugins()
+        ctx = StepContext(
+            bundle_root=dest_dir,
+            comfyui_dir=dst_comfyui,
+            models_dir=dst_models,
+            custom_nodes_dir=dst_cn,
+            input_dir=os.path.join(dst_comfyui, "input"),
+            output_dir=os.path.join(dst_comfyui, "output"),
+            phase=StepPhase.CREATE,
+            workflow_paths=workflow_paths,
+        )
+        run_steps(steps, ctx)
+
     # --- Step 7: Generate the bundle's user_settings.json ---
     # The deployer itself was cloned in Step 0; now that the custom nodes are in
-    # place we can record them.
+    # place we can record them (and the configured steps for install-time replay).
     if include_debugger:
-        write_bundle_user_settings(dest_dir, dst_cn)
+        write_bundle_user_settings(dest_dir, dst_cn, steps)
 
     # --- Step 8: Copy selected workflows next to the bundle root ---
     if include_workflows and workflow_paths:
