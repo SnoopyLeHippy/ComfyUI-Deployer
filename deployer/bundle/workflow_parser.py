@@ -6,6 +6,7 @@ carry the workflow in their metadata; both are loaded via
 """
 
 import os
+import re
 
 from deployer.core.workflow_io import (
     collect_subgraph_ids,
@@ -96,8 +97,13 @@ def find_custom_node_dirs_for_types(node_types: set[str], custom_nodes_dir: str)
     registered the node in its ``NODE_CLASS_MAPPINGS``.
     """
     needed_dirs: set[str] = set()
-    if not os.path.isdir(custom_nodes_dir):
+    if not os.path.isdir(custom_nodes_dir) or not node_types:
         return needed_dirs
+
+    # Single regex matching any quoted node type — one pass per file instead of N.
+    pattern = re.compile(
+        "|".join(re.escape(f'"{t}"') + "|" + re.escape(f"'{t}'") for t in node_types)
+    )
 
     for entry in os.listdir(custom_nodes_dir):
         entry_path = os.path.join(custom_nodes_dir, entry)
@@ -112,10 +118,9 @@ def find_custom_node_dirs_for_types(node_types: set[str], custom_nodes_dir: str)
                         content = fh.read()
                 except OSError:
                     continue
-                for ntype in node_types:
-                    if f'"{ntype}"' in content or f"'{ntype}'" in content:
-                        needed_dirs.add(entry)
-                        break
+                if pattern.search(content):
+                    needed_dirs.add(entry)
+                    break
             if entry in needed_dirs:
                 break
     return needed_dirs
