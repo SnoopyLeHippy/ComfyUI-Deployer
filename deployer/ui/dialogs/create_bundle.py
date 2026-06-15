@@ -36,8 +36,24 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from deployer.config import PROJECT_ROOT
 from deployer.plugins import load_plugins, registry
+from deployer.plugins.registry import _repo_dir_name
+from deployer.settings import UserSettings
 from deployer.ui import theme
+
+_LOCAL_PLUGINS_DIR = os.path.join(PROJECT_ROOT, "plugins")
+_REMOTE_PLUGINS_DIR = os.path.join(_LOCAL_PLUGINS_DIR, "remote")
+
+
+def _local_plugin_files() -> list[str]:
+    """Return sorted .py filenames in plugins/ (excluding underscore files)."""
+    if not os.path.isdir(_LOCAL_PLUGINS_DIR):
+        return []
+    return sorted(
+        f for f in os.listdir(_LOCAL_PLUGINS_DIR)
+        if f.endswith(".py") and not f.startswith("_")
+    )
 
 
 _STEP_TITLES = [
@@ -73,6 +89,8 @@ class CreateBundleDialog(QDialog):
         self._wf_paths: list[str] = []
         # Each entry: {"step": BundleStep, "widget": QWidget, "container": QWidget}
         self._step_rows: list[dict] = []
+        # Remote plugin checkboxes: {name: {"cb": QCheckBox, "repo": str, "ref": str}}
+        self._plugin_checks: dict[str, dict] = {}
         # Populate the plugin registry once so the Add-step menu can list them.
         load_plugins()
 
@@ -279,20 +297,35 @@ class CreateBundleDialog(QDialog):
         v.setContentsMargins(0, 6, 0, 0)
         v.setSpacing(8)
 
-        v.addWidget(self._help_label(
-            "Add custom install steps contributed by plugins. Each step runs "
-            "at bundle creation and/or on the recipient's machine, depending "
-            "on the plugin."
-        ))
+        # ── Plugins section ──────────────────────────────────────────
+        plugins_hdr = QLabel("PLUGINS TO INCLUDE")
+        plugins_hdr.setStyleSheet(theme.RADIO_SUBTITLE_STYLE)
+        v.addWidget(plugins_hdr)
 
-        add_row = QHBoxLayout()
+        # Dynamic plugin rows — rebuilt each time the page is entered.
+        self._plugins_section = QWidget()
+        self._plugins_vbox = QVBoxLayout(self._plugins_section)
+        self._plugins_vbox.setContentsMargins(0, 0, 0, 0)
+        self._plugins_vbox.setSpacing(4)
+        v.addWidget(self._plugins_section)
+
+        sep = QWidget()
+        sep.setFixedHeight(1)
+        sep.setStyleSheet(theme.SEPARATOR_STYLE)
+        v.addWidget(sep)
+
+        # ── Steps section ─────────────────────────────────────────────
+        steps_hdr = QHBoxLayout()
+        steps_lbl = QLabel("STEPS")
+        steps_lbl.setStyleSheet(theme.RADIO_SUBTITLE_STYLE)
+        steps_hdr.addWidget(steps_lbl)
+        steps_hdr.addStretch()
         self._add_step_btn = QPushButton("＋ Add step")
         self._add_step_btn.setStyleSheet(theme.BROWSE_BUTTON_STYLE)
-        self._add_step_btn.setFixedHeight(30)
+        self._add_step_btn.setFixedHeight(28)
         self._add_step_btn.clicked.connect(self._show_add_step_menu)
-        add_row.addWidget(self._add_step_btn)
-        add_row.addStretch()
-        v.addLayout(add_row)
+        steps_hdr.addWidget(self._add_step_btn)
+        v.addLayout(steps_hdr)
 
         # Scrollable list of configured step rows.
         scroll = QScrollArea()
@@ -309,6 +342,66 @@ class CreateBundleDialog(QDialog):
         scroll.setWidget(self._steps_container)
         v.addWidget(scroll, 1)
         return page
+
+    def _refresh_plugins_section(self) -> None:
+        """Rebuild the plugin checkbox list from the current state of plugins/ and settings."""
+        while self._plugins_vbox.count():
+            item = self._plugins_vbox.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+            elif item.layout():
+                # Clear and remove nested layouts
+                while item.layout().count():
+                    child = item.layout().takeAt(0)
+                    if child.widget():
+                        child.widget().deleteLater()
+
+        # Keep track of previously checked state so toggling page back/forth
+        # doesn't reset user choices.
+        prev_checked = {name: info["cb"].isChecked() for name, info in self._plugin_checks.items()}
+        self._plugin_checks.clear()
+
+        local_files = _local_plugin_files()
+        saved_repos = UserSettings.load_plugin_repos()
+        has_anything = local_files or saved_repos
+
+        if not has_anything:
+            hint = QLabel("No plugins installed — use ☰ → Manage Plugins... to add some.")
+            hint.setStyleSheet(theme.HELP_TEXT_STYLE)
+            hint.setWordWrap(True)
+            self._plugins_vbox.addWidget(hint)
+            return
+
+        # Local plugins — always embedded, no checkbox needed.
+        for fname in local_files:
+            row = QHBoxLayout()
+            lbl = QLabel(f"• {fname}")
+            lbl.setStyleSheet(theme.CARD_DESC_LABEL_STYLE)
+            row.addWidget(lbl)
+            row.addStretch()
+            badge = QLabel("local · always included")
+            badge.setStyleSheet(f"color: {theme.TEXT_SUBTLE}; font-size: 11px; font-style: italic;")
+            row.addWidget(badge)
+            self._plugins_vbox.addLayout(row)
+
+        # Remote plugins — checkbox per repo.
+        for entry in saved_repos:
+            repo = entry.get("repo", "")
+            ref = entry.get("ref", "main")
+            if not repo:
+                continue
+            name = _repo_dir_name(repo)
+            cb = QCheckBox(name)
+            cb.setStyleSheet(theme.CHECKBOX_STYLE)
+            cb.setChecked(prev_checked.get(name, True))  # default: include
+            row2 = QHBoxLayout()
+            row2.addWidget(cb)
+            row2.addStretch()
+            badge2 = QLabel(f"remote · {ref}")
+            badge2.setStyleSheet(f"color: {theme.BLUE_BADGE}; font-size: 11px; font-style: italic;")
+            row2.addWidget(badge2)
+            self._plugins_vbox.addLayout(row2)
+            self._plugin_checks[name] = {"cb": cb, "repo": repo, "ref": ref}
 
     # ----------------------------------------------------- Dynamic steps
     def _show_add_step_menu(self):
@@ -448,6 +541,8 @@ class CreateBundleDialog(QDialog):
         if index == _OPTIONS_PAGE:
             self._refresh_options_visibility()
             self._refresh_workflow_dependent_widgets()
+        if index == _STEPS_PAGE:
+            self._refresh_plugins_section()
         self._update_next_enabled()
 
     def _update_next_enabled(self):
@@ -552,3 +647,15 @@ class CreateBundleDialog(QDialog):
             config = step.read_config(row["widget"]) if row["widget"] is not None else {}
             result.append({"id": step.id, "config": config})
         return result
+
+    def plugin_repos(self) -> list[dict]:
+        """Return ``[{"repo", "ref"}]`` for every checked remote plugin.
+
+        Only remote plugins have checkboxes; local plugins are always embedded.
+        Call only after the dialog is accepted.
+        """
+        return [
+            {"repo": info["repo"], "ref": info["ref"]}
+            for info in self._plugin_checks.values()
+            if info["cb"].isChecked()
+        ]

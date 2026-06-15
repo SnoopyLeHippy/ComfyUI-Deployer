@@ -15,5 +15,6 @@ from deployer.plugins.registry import (  # noqa: F401
     PluginRegistry,
     load_plugins,
     registry,
+    sync_remote_plugins,
 )
 from deployer.plugins.runner import run_steps  # noqa: F401

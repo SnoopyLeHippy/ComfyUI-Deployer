@@ -54,7 +54,7 @@ Add nodes from the `+` button
 
 ### Creating a portable bundle
 
-`☰ → Create Bundle...` opens a 4-step wizard.
+`☰ → Create Bundle...` opens a 5-step wizard.
 
 ![Create bundle dialog](docs/screenshots/create_bundle.png)
 
@@ -66,6 +66,85 @@ Add nodes from the `+` button
 4. **Options** — the available options depend on the output format chosen at step 1:
    - In **folder** mode: `Include models`, `Include the ComfyUI Deployer tool`, and — if step 3 was filled — `Copy the workflow files into the bundle`.
    - In **`.bat`** mode: `Embed advanced settings` (writes `extra_model_paths.yaml` and the model/output/input overrides into the `.bat`, so an external model library can be wired up on the target machine), and — if step 3 was filled — `Embed the workflow files into the .bat`. ComfyUI Deployer is always included in this mode.
+5. **Install steps** *(optional)* — add custom steps contributed by plugins (see [Plugins](#plugins) below). Each step runs at bundle creation (`CREATE` phase, on the author's machine) and/or when the recipient installs the bundle (`INSTALL` phase).
+
+
+### Plugins
+
+Plugins let you add custom steps to the bundle lifecycle — for example copying models from a shared folder, patching config files, or running arbitrary scripts on the recipient's machine.
+
+#### Local plugins (private, per-machine)
+
+Drop any `.py` file into the **`plugins/`** folder at the root of the repo. This folder is **gitignored** — its contents are private to your machine and never pushed to the remote. The deployer auto-discovers every `.py` file there; the steps they register appear in the Create Bundle wizard under **Install steps → ＋ Add step**.
+
+When you export a bundle, local plugins travel with it automatically:
+- **`.bat` export** — plugin files are packed into a base64-encoded tar and extracted into `plugins/` before `headless_install` runs.
+- **Folder export** — plugin files are copied directly into `<bundle>/plugins/` alongside the deployer clone.
+
+A fully annotated example is available in [`plugins/example_copy_models_from_root.py`](plugins/example_copy_models_from_root.py) (disabled by default).
+
+#### Remote plugins (shared via git)
+
+Remote plugins live in a public or private git repo. They are listed by URL + branch/tag in `user_settings.json` under `"plugins" → "remote"`, cloned into `plugins/remote/<name>/` on first use, and discovered alongside local plugins.
+
+Manage remote plugins from **`☰ → Manage Plugins...`**:
+
+- **Add** — enter the repo URL and an optional ref (branch, tag, or commit). The deployer clones it immediately.
+- **Update** — pull the latest commits for a remote plugin.
+- **Remove** — delete the local clone and remove the entry from settings.
+
+At startup, the deployer silently clones any remote plugins that are listed in settings but not yet on disk, so the team can share a `user_settings.json` with a plugin list and everyone gets the plugins on first launch.
+
+When you export a bundle with remote plugins checked in step 5:
+- **`.bat` export** — the repo URL + ref is embedded in `user_settings.json`; the recipient's `headless_install` clones them before running steps.
+- **Folder export** — the repos are cloned directly into `<bundle>/plugins/remote/<name>/` during bundle creation so no network access is needed at install time.
+
+#### Writing a plugin
+
+A plugin module must expose a `register(registry)` entry point:
+
+```python
+from deployer.plugins import BundleStep, StepPhase
+
+class CopyExtraModelsStep(BundleStep):
+    id = "copy_extra_models"        # unique, stable — persisted in the bundle
+    name = "Copy extra models"
+    description = "Copy models from a shared folder into the bundle."
+    phases = StepPhase.INSTALL      # INSTALL, CREATE, or BOTH
+
+    def build_widget(self, parent=None):
+        # Optional config UI — import PyQt6 *lazily* here, never at module top level.
+        from PyQt6.QtWidgets import QLineEdit
+        edit = QLineEdit(parent)
+        edit.setPlaceholderText("Path to models folder...")
+        edit._data = edit           # stash for read_config
+        return edit
+
+    def read_config(self, widget) -> dict:
+        return {"path": widget.text().strip()}
+
+    def validate(self, config) -> str | None:
+        return None if config.get("path") else "Select a models folder."
+
+    def run(self, ctx, config):
+        import shutil, os
+        shutil.copytree(config["path"], ctx.models_dir, dirs_exist_ok=True)
+
+def register(registry):
+    registry.register(CopyExtraModelsStep())
+```
+
+The full API is documented in [`deployer/plugins/api.py`](deployer/plugins/api.py).
+
+**Step phases:**
+
+| Phase | When it runs |
+|---|---|
+| `StepPhase.CREATE` | During folder-bundle creation on the author's machine |
+| `StepPhase.INSTALL` | On the recipient's machine (`.bat` install or bundled deployer) |
+| `StepPhase.BOTH` | Both of the above |
+
+> **Important:** always import PyQt6 *lazily* inside `build_widget`. The headless install path imports plugin modules without Qt, and a top-level `import PyQt6` will break it.
 
 
 ### Advanced settings

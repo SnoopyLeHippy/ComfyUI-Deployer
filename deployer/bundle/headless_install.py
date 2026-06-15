@@ -30,7 +30,7 @@ from deployer.config import (
     PROJECT_ROOT,
     PYTHON_EXE,
 )
-from deployer.plugins import StepContext, StepPhase, load_plugins, run_steps
+from deployer.plugins import StepContext, StepPhase, load_plugins, run_steps, sync_remote_plugins
 from deployer.settings import UserSettings
 
 
@@ -64,12 +64,18 @@ def run() -> None:
         apply_folder_junctions(settings)
 
     # --- Run INSTALL-phase bundle steps (plugins) ---
-    # These act on the recipient's freshly installed ComfyUI (e.g. copy models
-    # from a path that exists on the target PC). Plugin modules ship with the
-    # cloned deployer, so committed plugins are available here.
+    # Clone any remote plugins listed in user_settings.json["plugins"]["remote"]
+    # before loading the registry so their code is present on disk.
+    plugin_repos = UserSettings.load_plugin_repos()
+    if plugin_repos:
+        print(f"Installing {len(plugin_repos)} remote plugin(s)...")
+        sync_remote_plugins(plugin_repos)
+
     steps = UserSettings.load_steps()
-    if steps:
+    if steps or plugin_repos:
         load_plugins()
+
+    if steps:
         ctx = StepContext(
             bundle_root=PROJECT_ROOT,
             comfyui_dir=COMFYUI_DIR,

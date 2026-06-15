@@ -8,3 +8,5 @@ __pycache__
 ComfyUI_windows_portable*
 torch*
 user_settings.json
+
+plugins/

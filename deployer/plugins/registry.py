@@ -6,12 +6,16 @@ plugin modules on disk and lets each register its steps via a module-level
 ``register(registry)`` entry point (or, as a fallback, by auto-registering any
 ``BundleStep`` subclass the module defines).
 
-Plugins are looked up in two locations:
+Plugins are looked up in three locations, in order:
 
 * ``deployer/plugins/builtin/`` — steps shipped with the deployer.
-* ``<PROJECT_ROOT>/plugins/`` — drop-in user plugins. These are picked up in a
-  bundle too, since the bundled deployer is a clone of the repo: commit a
-  plugin here and it ships with every bundle and runs at install time.
+* ``<PROJECT_ROOT>/plugins/`` — drop-in local user plugins (gitignored).
+* ``<PROJECT_ROOT>/plugins/remote/<name>/`` — remote plugin repos cloned by
+  :func:`sync_remote_plugins`. Each subdirectory is scanned for top-level
+  ``.py`` files the same way as a local plugin directory.
+
+Use :func:`sync_remote_plugins` to clone or update remote repos before calling
+:func:`load_plugins` (or pass ``force=True`` to reload after a sync).
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ import importlib.util
 import os
 import sys
 import traceback
+from typing import Callable
 
 from deployer.config import PROJECT_ROOT
 from deployer.plugins.api import BundleStep
@@ -54,6 +59,7 @@ registry = PluginRegistry()
 # Default discovery locations.
 _BUILTIN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "builtin")
 _USER_DIR = os.path.join(PROJECT_ROOT, "plugins")
+_REMOTE_DIR = os.path.join(_USER_DIR, "remote")
 
 _loaded = False
 
@@ -108,8 +114,74 @@ def _discover_dir(directory: str) -> None:
             print(f"Failed to load plugin '{path}':\n{traceback.format_exc()}")
 
 
+def _repo_dir_name(repo: str) -> str:
+    """Return the folder name for a remote plugin repo URL (same logic as custom nodes)."""
+    return os.path.basename(repo.rstrip("/").removesuffix(".git"))
+
+
+def sync_remote_plugins(
+    repos: list[dict],
+    *,
+    log: Callable[[str], None] = print,
+) -> dict[str, str]:
+    """Clone any remote plugin repos that are not yet present on disk.
+
+    *repos* is a list of ``{"repo": <url>, "ref": <branch/tag>}`` dicts as
+    stored in ``user_settings.json["plugins"]["remote"]``.
+
+    Each repo is cloned into ``plugins/remote/<name>/`` (relative to the
+    project root). Already-present directories are skipped (no pull — the user
+    controls updates via the management dialog). Returns a status dict
+    ``{name: "ok" | "skipped" | "error: <msg>"}``.
+
+    This function imports ``git_ops`` lazily to avoid pulling the subprocess
+    import on the cold path where no remote plugins exist.
+    """
+    from deployer.core import git_ops  # lazy — not needed when repos is empty
+
+    statuses: dict[str, str] = {}
+    if not repos:
+        return statuses
+
+    os.makedirs(_REMOTE_DIR, exist_ok=True)
+
+    for entry in repos:
+        repo = (entry or {}).get("repo", "").strip()
+        ref = (entry or {}).get("ref", "main").strip() or "main"
+        if not repo:
+            continue
+        name = _repo_dir_name(repo)
+        if not name:
+            continue
+        dest = os.path.join(_REMOTE_DIR, name)
+        if os.path.isdir(dest):
+            statuses[name] = "skipped"
+            continue
+        log(f"Cloning remote plugin '{name}' from {repo}...")
+        try:
+            git_ops.clone(repo, dest, cwd=_REMOTE_DIR, recursive=False)
+            if ref and ref not in ("main", "HEAD"):
+                git_ops.checkout(ref, cwd=dest, check=False)
+            statuses[name] = "ok"
+            log(f"  Plugin '{name}' installed.")
+        except Exception as exc:  # noqa: BLE001
+            statuses[name] = f"error: {exc}"
+            log(f"  Failed to clone plugin '{name}': {exc}")
+
+    return statuses
+
+
 def load_plugins(force: bool = False) -> PluginRegistry:
-    """Discover and register all plugins. Idempotent unless *force* is set."""
+    """Discover and register all plugins. Idempotent unless *force* is set.
+
+    Scans three locations:
+    1. ``deployer/plugins/builtin/`` (built-in steps)
+    2. ``plugins/`` at the project root (local user plugins)
+    3. ``plugins/remote/*/`` (remote repos cloned by :func:`sync_remote_plugins`)
+
+    Call :func:`sync_remote_plugins` first to ensure remote repos are present,
+    then call this with ``force=True`` to reload after a sync.
+    """
     global _loaded
     if _loaded and not force:
         return registry
@@ -117,5 +189,11 @@ def load_plugins(force: bool = False) -> PluginRegistry:
         registry.clear()
     _discover_dir(_BUILTIN_DIR)
     _discover_dir(_USER_DIR)
+    # Each subdirectory of plugins/remote/ is itself a plugin repo — scan it.
+    if os.path.isdir(_REMOTE_DIR):
+        for name in sorted(os.listdir(_REMOTE_DIR)):
+            subdir = os.path.join(_REMOTE_DIR, name)
+            if os.path.isdir(subdir):
+                _discover_dir(subdir)
     _loaded = True
     return registry

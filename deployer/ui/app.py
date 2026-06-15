@@ -59,6 +59,7 @@ from deployer.ui.dialogs import (
     AdvancedSettingsDialog,
     CreateBundleDialog,
     InstallPackageDialog,
+    ManagePluginsDialog,
     MissingNodesDialog,
     PackageRepairDialog,
     WorkflowConflictDialog,
@@ -230,6 +231,7 @@ class CustomNodeDeployerApp(QMainWindow):
         self.action_load_config = QAction("Load Configuration...", self)
         self.action_export_config = QAction("Export Configuration...", self)
         self.action_create_bundle = QAction("Create Bundle...", self)
+        self.action_manage_plugins = QAction("Manage Plugins...", self)
         self.hamburger_menu.addAction(self.action_settings)
         self.hamburger_menu.addAction(self.action_repair_packages)
         self.hamburger_menu.addAction(self.action_install_package)
@@ -238,12 +240,14 @@ class CustomNodeDeployerApp(QMainWindow):
         self.hamburger_menu.addAction(self.action_export_config)
         self.hamburger_menu.addSeparator()
         self.hamburger_menu.addAction(self.action_create_bundle)
+        self.hamburger_menu.addAction(self.action_manage_plugins)
         self.action_settings.triggered.connect(self._on_advanced_settings)
         self.action_repair_packages.triggered.connect(self._on_repair_packages)
         self.action_install_package.triggered.connect(self._on_install_package)
         self.action_export_config.triggered.connect(self._on_export_config)
         self.action_load_config.triggered.connect(self._on_load_config)
         self.action_create_bundle.triggered.connect(self._on_create_bundle)
+        self.action_manage_plugins.triggered.connect(self._on_manage_plugins)
         self.menu_btn.setMenu(self.hamburger_menu)
 
         subtitle = QLabel("Select nodes to install or update")
@@ -569,6 +573,10 @@ class CustomNodeDeployerApp(QMainWindow):
         finally:
             self._clear_busy()
 
+    def _on_manage_plugins(self):
+        """Open the Manage Plugins dialog. Registry is reloaded by the dialog on changes."""
+        ManagePluginsDialog(self).exec()
+
     def _on_create_bundle(self):
         """Open the Create Bundle dialog and run bundle creation in a background thread.
 
@@ -587,6 +595,7 @@ class CustomNodeDeployerApp(QMainWindow):
         export_as_bat = dialog.export_as_bat()
         export_advanced = dialog.export_advanced_settings()
         steps = dialog.steps()
+        plugin_repos = dialog.plugin_repos()
 
         # Lock the UI for the whole pipeline: resolution → conflict dialog →
         # actual build. Every exit path below must call ``_clear_busy``.
@@ -598,21 +607,21 @@ class CustomNodeDeployerApp(QMainWindow):
             print("Resolving workflow nodes for bundle...")
             threading.Thread(
                 target=self._resolve_workflows_for_bundle,
-                args=(dest, wf_paths, include_debugger, export_as_bat, export_advanced, include_models, include_workflows, steps),
+                args=(dest, wf_paths, include_debugger, export_as_bat, export_advanced, include_models, include_workflows, steps, plugin_repos),
                 daemon=True,
             ).start()
         elif export_as_bat:
             print(f"Exporting sharable installer to {dest}...")
             threading.Thread(
                 target=self._run_create_sharable_bat,
-                args=(dest, wf_paths, export_advanced, [], False, steps),
+                args=(dest, wf_paths, export_advanced, [], False, steps, plugin_repos),
                 daemon=True,
             ).start()
         else:
             print(f"Creating bundle at {dest}...")
             threading.Thread(
                 target=self._run_create_bundle,
-                args=(dest, wf_paths, include_debugger, [], include_models, False, steps),
+                args=(dest, wf_paths, include_debugger, [], include_models, False, steps, plugin_repos),
                 daemon=True,
             ).start()
 
@@ -630,6 +639,7 @@ class CustomNodeDeployerApp(QMainWindow):
         include_models: bool = False,
         include_workflows: bool = False,
         steps: list[dict] | None = None,
+        plugin_repos: list[dict] | None = None,
     ):
         """Background thread: resolve workflow node types across all selected workflows."""
         try:
@@ -649,6 +659,7 @@ class CustomNodeDeployerApp(QMainWindow):
             "include_models": include_models,
             "include_workflows": include_workflows,
             "steps": steps or [],
+            "plugin_repos": plugin_repos or [],
             # Bundle flow only needs the {repo: description} mapping for cloning.
             "resolved": {entry.repo: entry.description for entry in merged.resolved},
             "conflicts": merged.conflicts,
@@ -666,6 +677,7 @@ class CustomNodeDeployerApp(QMainWindow):
         include_models = data.get("include_models", False)
         include_workflows = data.get("include_workflows", False)
         steps = data.get("steps", [])
+        plugin_repos = data.get("plugin_repos", [])
         resolved: dict[str, str] = data["resolved"]
         conflicts = data["conflicts"]
         unresolved = data["unresolved"]
@@ -691,7 +703,7 @@ class CustomNodeDeployerApp(QMainWindow):
             print(f"Exporting sharable installer to {dest}...")
             threading.Thread(
                 target=self._run_create_sharable_bat,
-                args=(dest, wf_paths, export_advanced, extra_repos, include_workflows, steps),
+                args=(dest, wf_paths, export_advanced, extra_repos, include_workflows, steps, plugin_repos),
                 daemon=True,
             ).start()
             return
@@ -699,7 +711,7 @@ class CustomNodeDeployerApp(QMainWindow):
         print(f"Creating bundle at {dest}...")
         threading.Thread(
             target=self._run_create_bundle,
-            args=(dest, wf_paths, include_debugger, extra_repos, include_models, include_workflows, steps),
+            args=(dest, wf_paths, include_debugger, extra_repos, include_models, include_workflows, steps, plugin_repos),
             daemon=True,
         ).start()
 
@@ -712,6 +724,7 @@ class CustomNodeDeployerApp(QMainWindow):
         include_models: bool = False,
         include_workflows: bool = False,
         steps: list[dict] | None = None,
+        plugin_repos: list[dict] | None = None,
     ):
         try:
             create_bundle(
@@ -722,6 +735,7 @@ class CustomNodeDeployerApp(QMainWindow):
                 include_models,
                 include_workflows=include_workflows,
                 steps=steps or [],
+                plugin_repos=plugin_repos or [],
             )
             print("Bundle created.")
         except Exception as exc:
@@ -737,6 +751,7 @@ class CustomNodeDeployerApp(QMainWindow):
         extra_repos: list[tuple[str, str]] | None = None,
         include_workflows: bool = False,
         steps: list[dict] | None = None,
+        plugin_repos: list[dict] | None = None,
     ):
         try:
             bat_path = create_sharable_bat(
@@ -746,6 +761,7 @@ class CustomNodeDeployerApp(QMainWindow):
                 extra_repos=extra_repos or [],
                 include_workflows=include_workflows,
                 steps=steps or [],
+                plugin_repos=plugin_repos or [],
             )
             print(f"Sharable installer created: {bat_path}")
         except Exception as exc:
@@ -1221,6 +1237,23 @@ class CustomNodeDeployerApp(QMainWindow):
         if not self._splitter_sized:
             self._splitter_sized = True
             QTimer.singleShot(0, self._apply_splitter_ratio)
+            # Sync remote plugins in the background so their steps are available
+            # in the Create Bundle dialog without blocking startup.
+            QTimer.singleShot(0, self._sync_remote_plugins_bg)
+
+    def _sync_remote_plugins_bg(self):
+        repos = UserSettings.load_plugin_repos()
+        if repos:
+            threading.Thread(
+                target=self._do_sync_remote_plugins,
+                args=(repos,),
+                daemon=True,
+            ).start()
+
+    def _do_sync_remote_plugins(self, repos):
+        from deployer.plugins import load_plugins, sync_remote_plugins
+        sync_remote_plugins(repos)
+        load_plugins(force=True)
 
     def _apply_splitter_ratio(self):
         h = self.body_splitter.height()

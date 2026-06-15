@@ -24,6 +24,7 @@ from deployer.config import (
     CUSTOM_NODES_DIR,
     EXTRA_MODEL_PATHS_YAML,
     MODELS_DIR,
+    PROJECT_ROOT,
 )
 from deployer.plugins import StepContext, StepPhase, load_plugins, run_steps
 from deployer.core.filesystem import force_remove_readonly
@@ -36,6 +37,60 @@ def _resolve_junction(path: str) -> str:
     return read_junction_target(path) or path
 
 
+def _clone_remote_plugins(dest_dir: str, plugin_repos: list[dict]) -> None:
+    """Clone selected remote plugin repos into ``dest_dir/plugins/remote/``.
+
+    Mirrors what ``sync_remote_plugins`` does at install time, but runs on the
+    author's machine during folder-bundle creation so the bundled deployer has
+    the plugin code available without a network connection on first launch.
+    """
+    if not plugin_repos:
+        return
+    from deployer.core import git_ops
+    remote_dir = os.path.join(dest_dir, "plugins", "remote")
+    os.makedirs(remote_dir, exist_ok=True)
+    for entry in plugin_repos:
+        repo = entry.get("repo", "").strip()
+        ref = entry.get("ref", "main").strip() or "main"
+        if not repo:
+            continue
+        name = os.path.basename(repo.rstrip("/").removesuffix(".git"))
+        if not name:
+            continue
+        dest = os.path.join(remote_dir, name)
+        if os.path.isdir(dest):
+            print(f"  Remote plugin already present: {name}")
+            continue
+        print(f"  Cloning remote plugin: {name} ({repo}@{ref})")
+        try:
+            git_ops.clone(repo, dest, cwd=remote_dir, recursive=False)
+            if ref and ref not in ("main", "HEAD"):
+                git_ops.checkout(ref, cwd=dest, check=False)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  Warning: failed to clone plugin '{name}': {exc}")
+
+
+def _copy_local_plugins(dest_dir: str) -> None:
+    """Copy user plugin .py files from the local plugins/ dir into the bundle.
+
+    plugins/ is gitignored, so the deployer clone (Step 0) won't include it.
+    Copying explicitly lets the bundled deployer load these plugins and replay
+    their INSTALL-phase steps on the recipient's machine.
+    Skips silently when the source directory is absent or empty.
+    """
+    src = os.path.join(PROJECT_ROOT, "plugins")
+    if not os.path.isdir(src):
+        return
+    files = [f for f in os.listdir(src) if f.endswith(".py") and not f.startswith("_")]
+    if not files:
+        return
+    dst = os.path.join(dest_dir, "plugins")
+    os.makedirs(dst, exist_ok=True)
+    for name in sorted(files):
+        shutil.copy2(os.path.join(src, name), os.path.join(dst, name))
+        print(f"  Copied local plugin: {name}")
+
+
 def create_bundle(
     dest_dir: str,
     workflow_paths: list[str],
@@ -45,6 +100,7 @@ def create_bundle(
     *,
     include_workflows: bool = False,
     steps: list[dict] | None = None,
+    plugin_repos: list[dict] | None = None,
 ) -> None:
     """Create a clean portable ComfyUI bundle at *dest_dir*.
 
@@ -89,6 +145,12 @@ def create_bundle(
     # matching user_settings.json is written at the very end (Step 7).
     if include_debugger:
         clone_deployer_into_bundle(dest_dir)
+        # --- Step 0b: Copy local plugins (gitignored, not in the clone) ---
+        _copy_local_plugins(dest_dir)
+        # --- Step 0c: Clone selected remote plugins into the bundle ---
+        if plugin_repos:
+            print(f"Cloning {len(plugin_repos)} remote plugin(s) into bundle...")
+            _clone_remote_plugins(dest_dir, plugin_repos)
 
     # --- Step 1: Download and extract a clean ComfyUI ---
     version = get_comfyui_version()
@@ -189,7 +251,7 @@ def create_bundle(
     # The deployer itself was cloned in Step 0; now that the custom nodes are in
     # place we can record them (and the configured steps for install-time replay).
     if include_debugger:
-        write_bundle_user_settings(dest_dir, dst_cn, steps)
+        write_bundle_user_settings(dest_dir, dst_cn, steps, plugin_repos)
 
     # --- Step 8: Copy selected workflows next to the bundle root ---
     if include_workflows and workflow_paths:

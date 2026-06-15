@@ -125,6 +125,11 @@ def get_current_branch(cwd: str) -> str:
     return result.stdout.strip()
 
 
+def pull(cwd: str, *, check: bool = True) -> None:
+    """Run ``git pull`` inside *cwd*, streaming output."""
+    _stream_cmd(["git", "pull"], cwd=cwd, check=check)
+
+
 def describe_head(cwd: str, *, fallback: str = "HEAD") -> str:
     """Return the most descriptive label for HEAD (tag, then branch, then *fallback*)."""
     return get_current_tag(cwd) or get_current_branch(cwd) or fallback

@@ -17,7 +17,13 @@ on-disk schema is owned by a single module. The file format is::
         "steps": [                   # optional, configured bundle-step plugins
             {"id": ..., "config": {...}},
             ...
-        ]
+        ],
+        "plugins": {                 # optional, remote plugin repos
+            "remote": [
+                {"repo": ..., "ref": "main"},
+                ...
+            ]
+        }
     }
 
 Two write modes:
@@ -79,6 +85,27 @@ class UserSettings:
         plugin runner during the install phase.
         """
         return cls.load_raw().get("steps", [])
+
+    @classmethod
+    def load_plugin_repos(cls) -> list[dict]:
+        """Return the remote plugin repo entries, or ``[]`` if absent.
+
+        Each entry is ``{"repo": <url>, "ref": <branch/tag/commit>}``.
+        """
+        return cls.load_raw().get("plugins", {}).get("remote", [])
+
+    @classmethod
+    def save_plugin_repos(cls, repos: list[dict]) -> None:
+        """Update the remote plugin repo list, preserving all other keys."""
+        data = cls.load_raw() or {"nodes": []}
+        if repos:
+            data.setdefault("plugins", {})["remote"] = repos
+        else:
+            data.get("plugins", {}).pop("remote", None)
+            if not data.get("plugins"):
+                data.pop("plugins", None)
+        with open(cls.PATH, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=4, ensure_ascii=False)
 
     @classmethod
     def load_settings(cls) -> dict:

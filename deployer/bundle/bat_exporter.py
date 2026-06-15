@@ -39,6 +39,7 @@ from deployer.settings import UserSettings
 
 
 BAT_FILENAME = "install_comfyui_bundle.bat"
+_LOCAL_PLUGINS_DIR = os.path.join(PROJECT_ROOT, "plugins")
 
 # Comfy-Org ships a versioned portable archive per release; fall back to the
 # upstream "latest" asset when we can't read a concrete version on disk.
@@ -89,6 +90,36 @@ def _build_node_list(
     return nodes
 
 
+def _collect_local_plugins(plugin_dir: str) -> list[str]:
+    """Return sorted paths of user plugin ``.py`` files in *plugin_dir*.
+
+    Skips ``__init__.py`` and any file starting with ``_``.
+    Returns an empty list when the directory is absent or empty.
+    """
+    if not os.path.isdir(plugin_dir):
+        return []
+    return sorted(
+        os.path.join(plugin_dir, f)
+        for f in os.listdir(plugin_dir)
+        if f.endswith(".py") and not f.startswith("_")
+    )
+
+
+def _build_plugins_tarball_b64(plugin_paths: list[str]) -> str | None:
+    """Pack *plugin_paths* into an uncompressed in-memory tar, base64-encoded.
+
+    The tar is extracted into ``plugins/`` by the .bat at install time.
+    Returns ``None`` when *plugin_paths* is empty.
+    """
+    if not plugin_paths:
+        return None
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        for path in plugin_paths:
+            tar.add(path, arcname=os.path.basename(path))
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
 def _build_workflows_tarball_b64(workflow_paths: list[str]) -> str:
     """Pack workflow files into an uncompressed in-memory tar, base64-encoded.
 
@@ -127,6 +158,7 @@ def _render_bat(
     settings_b64: str,
     extra_yaml_b64: str | None,
     workflows_b64: str | None = None,
+    plugins_b64: str | None = None,
 ) -> str:
     """Return the full CRLF-joined contents of the install .bat."""
     branch_flag = (
@@ -249,6 +281,19 @@ def _render_bat(
         )
         lines.append("del workflows.tar 2>nul")
 
+    if plugins_b64:
+        lines += [
+            "",
+            "REM --- Extract embedded local plugins into plugins/ ---",
+            "echo Installing local plugins...",
+        ]
+        _emit_b64(lines, plugins_b64, "plugins.b64", "'plugins.tar'")
+        lines.append(
+            "%PYTHON_EXEC% -c \"import tarfile,os;os.makedirs('plugins',exist_ok=True);"
+            "tarfile.open('plugins.tar').extractall('plugins')\""
+        )
+        lines.append("del plugins.tar 2>nul")
+
     lines += [
         "",
         "REM --- Clone custom nodes and install their requirements ---",
@@ -274,6 +319,7 @@ def create_sharable_bat(
     extra_repos: list[tuple[str, str]] | None = None,
     include_workflows: bool = False,
     steps: list[dict] | None = None,
+    plugin_repos: list[dict] | None = None,
 ) -> str:
     """Generate the sharable install ``.bat`` at *dest_dir*; return its path.
 
@@ -304,6 +350,8 @@ def create_sharable_bat(
         # Persisted as-is; the headless install replays the INSTALL-phase ones
         # on the recipient's machine (plugin modules ship with the cloned deployer).
         data["steps"] = steps
+    if plugin_repos:
+        data["plugins"] = {"remote": plugin_repos}
     extra_yaml_b64: str | None = None
     if export_advanced:
         settings = UserSettings.load_settings()
@@ -322,6 +370,11 @@ def create_sharable_bat(
         workflows_b64 = _build_workflows_tarball_b64(workflow_paths)
         print(f"Embedded {len(workflow_paths)} workflow(s) into the .bat")
 
+    local_plugin_paths = _collect_local_plugins(_LOCAL_PLUGINS_DIR)
+    plugins_b64 = _build_plugins_tarball_b64(local_plugin_paths)
+    if plugins_b64:
+        print(f"Embedded {len(local_plugin_paths)} local plugin(s) into the .bat")
+
     content = _render_bat(
         deployer_repo=repo_url,
         deployer_branch=branch,
@@ -329,6 +382,7 @@ def create_sharable_bat(
         settings_b64=settings_b64,
         extra_yaml_b64=extra_yaml_b64,
         workflows_b64=workflows_b64,
+        plugins_b64=plugins_b64,
     )
 
     os.makedirs(dest_dir, exist_ok=True)

@@ -1,6 +1,7 @@
 ﻿"""Modal dialogs used by the deployer UI."""
 
 from deployer.ui.dialogs.add_node import AddNodeDialog  # noqa: F401
+from deployer.ui.dialogs.manage_plugins import ManagePluginsDialog  # noqa: F401
 from deployer.ui.dialogs.advanced_settings import (  # noqa: F401
     AdvancedSettingsDialog,
     apply_advanced_settings,
