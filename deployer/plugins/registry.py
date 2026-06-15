@@ -9,7 +9,8 @@ plugin modules on disk and lets each register its steps via a module-level
 Plugins are looked up in three locations, in order:
 
 * ``deployer/plugins/builtin/`` — steps shipped with the deployer.
-* ``<PROJECT_ROOT>/plugins/`` — drop-in local user plugins (gitignored).
+* ``<PROJECT_ROOT>/plugins/`` — drop-in local user plugins (gitignored), including
+  top-level ``.py`` files and any subdirectory packages.
 * ``<PROJECT_ROOT>/plugins/remote/<name>/`` — remote plugin repos cloned by
   :func:`sync_remote_plugins`. Each subdirectory is scanned for top-level
   ``.py`` files the same way as a local plugin directory.
@@ -189,6 +190,12 @@ def load_plugins(force: bool = False) -> PluginRegistry:
         registry.clear()
     _discover_dir(_BUILTIN_DIR)
     _discover_dir(_USER_DIR)
+    # Each subdirectory of plugins/ (excluding remote/) is a local plugin package.
+    if os.path.isdir(_USER_DIR):
+        for name in sorted(os.listdir(_USER_DIR)):
+            subdir = os.path.join(_USER_DIR, name)
+            if os.path.isdir(subdir) and subdir != _REMOTE_DIR:
+                _discover_dir(subdir)
     # Each subdirectory of plugins/remote/ is itself a plugin repo — scan it.
     if os.path.isdir(_REMOTE_DIR):
         for name in sorted(os.listdir(_REMOTE_DIR)):
