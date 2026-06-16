@@ -54,6 +54,11 @@ class ComfyRunner:
         main_py = os.path.join(COMFYUI_DIR, "main.py")
         cmd = [PYTHON_EXE, "-s", main_py, "--windows-standalone-build"]
         print(f"Starting ComfyUI: {' '.join(cmd)}")
+        # Force the child's stdout/stderr to UTF-8. When ComfyUI's output is
+        # redirected to our pipe (not a real console), Python otherwise picks
+        # the Windows locale codec (cp1252), which crashes on the emoji some
+        # custom nodes (e.g. rgthree-comfy) print at startup.
+        env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
         try:
             self._proc = subprocess.Popen(
                 cmd,
@@ -63,6 +68,7 @@ class ComfyRunner:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                env=env,
             )
             self._on_started()
             assert self._proc.stdout is not None
