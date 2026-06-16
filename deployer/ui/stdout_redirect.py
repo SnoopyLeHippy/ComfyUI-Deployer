@@ -1,10 +1,21 @@
 """Forward writes from ``sys.stdout`` / ``sys.stderr`` to the console widget."""
 
 import io
+import re
 import threading
 from typing import IO, Optional
 
 from PyQt6.QtCore import Q_ARG, QMetaObject, Qt
+
+
+# ANSI escape sequences (colours, cursor moves, ...). ComfyUI and some custom
+# nodes emit coloured output that the Qt console can't render, so it would show
+# up as literal noise like "[32m[INFO][0m". Strip it before display/logging.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
 
 
 class StdoutRedirector(io.TextIOBase):
@@ -50,6 +61,7 @@ class StdoutRedirector(io.TextIOBase):
             if idx == -1:
                 break
             line, self._buffer = self._buffer[: idx + 1], self._buffer[idx + 1:]
+            line = _strip_ansi(line)
             self._emit(line)
             self._log(line)
         return len(text)
@@ -78,6 +90,7 @@ class StdoutRedirector(io.TextIOBase):
     def flush(self) -> None:
         # Flush any trailing partial line (e.g. a prompt with no newline).
         if self._buffer:
-            self._emit(self._buffer)
-            self._log(self._buffer)
+            line = _strip_ansi(self._buffer)
+            self._emit(line)
+            self._log(line)
             self._buffer = ""
