@@ -125,6 +125,38 @@ def get_current_branch(cwd: str) -> str:
     return result.stdout.strip()
 
 
+def get_short_commit(cwd: str) -> str:
+    """Return the short HEAD commit hash, or ``""`` if it can't be read."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=_DEFAULT_TIMEOUT,
+            check=False,
+        )
+    except Exception:
+        return ""
+    return result.stdout.strip()
+
+
+def is_dirty(cwd: str) -> bool:
+    """Return ``True`` if the working tree in *cwd* has uncommitted changes."""
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=_DEFAULT_TIMEOUT,
+            check=False,
+        )
+    except Exception:
+        return False
+    return bool(result.stdout.strip())
+
+
 def pull(cwd: str, *, check: bool = True) -> None:
     """Run ``git pull`` inside *cwd*, streaming output."""
     _stream_cmd(["git", "pull"], cwd=cwd, check=check)

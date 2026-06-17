@@ -30,6 +30,21 @@ def clone_node_into_bundle(repo_url: str, ref: str, custom_nodes_dir: str) -> No
     print(f"  Cloning {name} (ref: {ref})...")
     git_ops.clone(repo_url, name, cwd=custom_nodes_dir)
     git_ops.checkout(ref, cwd=dest, check=False)
+    _log_checked_out_version(name, dest)
+
+
+def _log_checked_out_version(name: str, dest: str) -> None:
+    """Print the branch/tag and commit actually checked out in *dest*.
+
+    Best-effort: the diagnostic shouldn't ever abort a bundle, so any git
+    failure is swallowed and simply skips the line.
+    """
+    try:
+        label = git_ops.describe_head(dest)
+        commit = git_ops.rev_parse("HEAD", dest)
+        print(f"  -> {name} at {label} ({commit[:8]})")
+    except Exception:
+        pass
 
 
 def install_bundle_requirements(python_exe: str, custom_nodes_dir: str, node_dirs: list[str]) -> None:

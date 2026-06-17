@@ -32,6 +32,7 @@ from PyQt6.QtWidgets import (
 from deployer.bundle import create_bundle, create_sharable_bat
 from deployer.config import CUSTOM_NODES_DIR, PROJECT_ROOT, PYTHON_EXE
 from deployer.core.comfy_runner import ComfyRunner
+from deployer.core import git_ops
 from deployer.core.filesystem import force_remove_readonly
 from deployer.core.installer import (
     install,
@@ -144,6 +145,23 @@ def _install_excepthooks(log_file):
 
     sys.excepthook = _hook
     threading.excepthook = _thread_hook
+
+
+def _log_deployer_version() -> None:
+    """Print which deployer checkout is running (branch, commit, dirty flag).
+
+    Helps tell apart a run from the git repo and one from a .bat bundle's
+    cloned deployer when their behaviour diverges. Best-effort: if PROJECT_ROOT
+    isn't a git checkout, fall back to a plain note.
+    """
+    branch = git_ops.describe_head(PROJECT_ROOT, fallback="")
+    commit = git_ops.get_short_commit(PROJECT_ROOT)
+    if not commit:
+        print(f"Deployer version: unknown (not a git checkout) — {PROJECT_ROOT}")
+        return
+    dirty = " (modified)" if git_ops.is_dirty(PROJECT_ROOT) else ""
+    label = branch or "detached"
+    print(f"Deployer version: {label} @ {commit}{dirty} — {PROJECT_ROOT}")
 
 
 class _ResizeHandle(QSplitterHandle):
@@ -318,6 +336,7 @@ class CustomNodeDeployerApp(QMainWindow):
         _install_excepthooks(self._log_file)
         if self._log_file is not None:
             print(f"Session log: {self._log_file.name}")
+        _log_deployer_version()
 
         # Comfy process state signals
         self._comfy_started.connect(self._on_comfy_started)
