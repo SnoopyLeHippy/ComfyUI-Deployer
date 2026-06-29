@@ -415,7 +415,7 @@ class CustomNodeDeployerApp(QMainWindow):
     def _check_refs(self):
         """Background thread: mark installed nodes whose ref has drifted as pending update."""
         for card in list(self._node_cards):
-            if card.node.has_gitlab_config_error or not card.node.is_installed:
+            if not card.node.is_installed:
                 continue
             if not card.node.is_ref_current():
                 def _mark(c=card):
@@ -434,7 +434,7 @@ class CustomNodeDeployerApp(QMainWindow):
         """
         for card in list(self._node_cards):
             node = card.node
-            if node.has_gitlab_config_error or not node.is_installed:
+            if not node.is_installed:
                 continue
             if node.is_behind_remote():
                 def _mark(c=card):
@@ -478,11 +478,8 @@ class CustomNodeDeployerApp(QMainWindow):
             self._ui_call.emit(self._refresh_cards)
 
     def _execute_plan(self, plan: InstallPlan) -> None:
-        """Run an :class:`InstallPlan`. Order matters: errors → uninstall →
+        """Run an :class:`InstallPlan`. Order matters: uninstall →
         ref-bump → install (with requirements) → orphan promotion."""
-        for node in plan.invalid_gitlab:
-            print(f"Error: {node.gitlab_config_error_message}")
-
         for node in plan.to_uninstall:
             self._uninstall_node(node)
 
@@ -502,7 +499,6 @@ class CustomNodeDeployerApp(QMainWindow):
             node = CustomNode(orphan.repo, orphan.ref, orphan.name)
             if not os.path.exists(node.comfyui_path):
                 node.clone()
-                node.link()
             node.is_installed = True
             promotions.append((orphan, node))
             if orphan.is_install_requirements:
@@ -1169,10 +1165,8 @@ class CustomNodeDeployerApp(QMainWindow):
     def _refresh_install_btn(self):
         """Enable Install (blue) if any card is selected, pending update, or has requirements to install."""
         active = any(
-            not c.node.has_gitlab_config_error and (
-                c.is_selected or c.is_pending_update
-                or (c.node.is_install_requirements and c.node.is_installed)
-            )
+            c.is_selected or c.is_pending_update
+            or (c.node.is_install_requirements and c.node.is_installed)
             for c in self._node_cards
         ) or any(c.is_selected or c.is_install_requirements for c in self._orphan_cards)
         self.install_btn.setEnabled(active)
@@ -1182,11 +1176,7 @@ class CustomNodeDeployerApp(QMainWindow):
             self.install_btn.setStyleSheet(theme.INSTALL_BUTTON_STYLE)
 
     def _save_user_settings(self):
-        """Persist current node list to user_settings.json.
-
-        Note: this overwrites the file with only the ``nodes`` key, dropping
-        any existing ``settings`` subdict — see :meth:`UserSettings.save_nodes`.
-        """
+        """Persist current node list to user_settings.json, preserving all other keys."""
         UserSettings.save_nodes([
             {"repo": card.node.repo, "ref": card.node.ref, "description": card.node.description}
             for card in self._node_cards

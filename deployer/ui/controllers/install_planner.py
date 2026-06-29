@@ -18,7 +18,6 @@ class InstallPlan:
     to_install: list[CustomNode] = field(default_factory=list)
     to_uninstall: list[CustomNode] = field(default_factory=list)
     to_update: list = field(default_factory=list)        # NodeCard — needs ref change before clone
-    invalid_gitlab: list[CustomNode] = field(default_factory=list)
     with_requirements: list[CustomNode] = field(default_factory=list)
     selected_orphans: list = field(default_factory=list)  # OrphanNodeCard
 
@@ -39,18 +38,13 @@ def plan_install(node_cards, orphan_cards) -> InstallPlan:
     Mirrors the legacy ``_run_install`` classification: a selected installed
     node is queued for removal; a selected uninstalled node, for install; a
     card marked as pending-update keeps its install and re-clones at the new
-    ref. Nodes with a GitLab config error are routed to ``invalid_gitlab``
-    when they would have triggered an action.
+    ref.
     """
     plan = InstallPlan()
     to_install_set: set[CustomNode] = set()
 
     for card in node_cards:
         node = card.node
-        if node.has_gitlab_config_error:
-            if card.is_selected or card.is_pending_update or (node.is_install_requirements and node.is_installed):
-                plan.invalid_gitlab.append(node)
-            continue
         if card.is_selected and node.is_installed:
             plan.to_uninstall.append(node)
         elif card.is_selected and not node.is_installed:
@@ -63,7 +57,7 @@ def plan_install(node_cards, orphan_cards) -> InstallPlan:
     # already-installed nodes whose checkbox is on AND freshly-cloned ones.
     for card in node_cards:
         node = card.node
-        if node.has_gitlab_config_error or not node.is_install_requirements:
+        if not node.is_install_requirements:
             continue
         if node.is_installed or node in to_install_set:
             plan.with_requirements.append(node)

@@ -60,13 +60,12 @@ def load_custom_nodes() -> list[CustomNode]:
 # ---------------------------------------------------------------------------
 
 def install_nodes(nodes: list[CustomNode]) -> None:
-    """Clone and link the given custom nodes into ComfyUI."""
+    """Clone the given custom nodes into ComfyUI."""
     if not nodes:
         return
     print("Installing custom nodes...")
     for node in nodes:
         node.clone()
-        node.link()
         node.is_installed = True
 
 

@@ -26,14 +26,12 @@ on-disk schema is owned by a single module. The file format is::
         }
     }
 
-Two write modes:
+Two write modes, both of which preserve all other keys:
 
-* :meth:`UserSettings.save_nodes` overwrites the file with only the ``nodes``
-  key. This is intentional to preserve the historical behaviour of the
-  add/remove/load flows — any ``settings`` subdict gets dropped.
+* :meth:`UserSettings.save_nodes` reads the existing file, updates only the
+  ``nodes`` key, and writes it back so the ``settings`` subdict is preserved.
 * :meth:`UserSettings.save_settings` reads the existing file, updates only
-  the ``settings`` subdict, and writes it back so the node list is
-  preserved.
+  the ``settings`` subdict, and writes it back so the node list is preserved.
 """
 
 import json
@@ -68,13 +66,11 @@ class UserSettings:
 
     @classmethod
     def save_nodes(cls, nodes: list[dict]) -> None:
-        """Overwrite the file with only the ``nodes`` key.
-
-        The optional ``settings`` subdict is intentionally dropped to preserve
-        the historical behaviour of node add/remove/load/export flows.
-        """
+        """Update the ``nodes`` key, preserving all other keys (settings, steps, plugins)."""
+        data = cls.load_raw() or {}
+        data["nodes"] = nodes
         with open(cls.PATH, "w", encoding="utf-8") as fh:
-            json.dump({"nodes": nodes}, fh, indent=4, ensure_ascii=False)
+            json.dump(data, fh, indent=4, ensure_ascii=False)
 
     @classmethod
     def load_steps(cls) -> list[dict]:

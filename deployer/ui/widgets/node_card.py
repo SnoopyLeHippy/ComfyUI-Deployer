@@ -38,7 +38,6 @@ class NodeCard(BaseCard):
         self.customContextMenuRequested.connect(self._show_context_menu)
 
         self.req_checkbox.setChecked(node.is_install_requirements)
-        self.req_checkbox.setEnabled(not self.node.has_gitlab_config_error)
 
         self.refresh()
 
@@ -79,8 +78,6 @@ class NodeCard(BaseCard):
 
     def _current_state(self) -> CardState:
         node = self.node
-        if node.has_gitlab_config_error:
-            return CardState.ERROR
         if self.is_selected and node.is_installed:
             return CardState.TO_REMOVE
         if self.is_selected and self.is_from_workflow:
@@ -96,7 +93,7 @@ class NodeCard(BaseCard):
         return CardState.DEFAULT
 
     def _can_toggle_selection(self) -> bool:
-        return not self.node.has_gitlab_config_error
+        return True
 
     def _on_selection_toggled(self) -> None:
         # Clicking a "Need update" card arms it for update rather than
@@ -125,13 +122,6 @@ class NodeCard(BaseCard):
     # ------------------------------------------------------------------
 
     def refresh(self) -> None:
-        if self.node.has_gitlab_config_error:
-            self.is_selected = False
-            self.node.is_selected = False
-            self.is_pending_update = False
-            self.req_checkbox.setEnabled(False)
-        else:
-            self.req_checkbox.setEnabled(True)
         self._refresh_text()
         super().refresh()
 
@@ -154,16 +144,6 @@ class NodeCard(BaseCard):
         self._apply_tooltips(truncated)
 
     def _apply_tooltips(self, desc_is_truncated: bool) -> None:
-        if self.node.has_gitlab_config_error:
-            tooltip = self.node.gitlab_config_error_tooltip
-            self.name_label.setToolTip(tooltip)
-            self.badge.setToolTip(tooltip)
-            self.req_checkbox.setToolTip(tooltip)
-            self.ref_label.setToolTip(tooltip)
-            self.desc_label.setToolTip(tooltip)
-            self.setToolTip(tooltip)
-            return
-
         self.name_label.setToolTip("")
         self.badge.setToolTip("")
         self.req_checkbox.setToolTip("")
@@ -229,9 +209,6 @@ class NodeCard(BaseCard):
     # ------------------------------------------------------------------
 
     def mouseDoubleClickEvent(self, event):
-        if self.node.has_gitlab_config_error:
-            super().mouseDoubleClickEvent(event)
-            return
         if event.button() == Qt.MouseButton.LeftButton:
             # Undo the selection toggle fired by the preceding mousePressEvent.
             def _undo_select():
