@@ -168,6 +168,23 @@ QWidget#nodeCard QCheckBox {
 }
 """)
 
+NODE_CARD_NEED_UPDATE_STYLE = _qss("""
+QWidget#nodeCard {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 %(surface_input)s,
+        stop:0.5 %(yellow_surface_mid)s,
+        stop:1 %(yellow_surface_end)s);
+    border-radius: 8px;
+    border: 1px solid %(yellow_surface_border)s;
+}
+QWidget#nodeCard QLabel {
+    background-color: transparent;
+}
+QWidget#nodeCard QCheckBox {
+    background-color: transparent;
+}
+""")
+
 NODE_CARD_IMPORT_STYLE = _qss("""
 QWidget#nodeCard {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -296,6 +313,17 @@ BADGE_TO_UPDATE_STYLE = _qss("""
 QLabel {
     background-color: %(amber_badge)s;
     color: %(text_primary)s;
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: bold;
+}
+""")
+
+BADGE_NEED_UPDATE_STYLE = _qss("""
+QLabel {
+    background-color: %(yellow_badge)s;
+    color: %(surface_bg)s;
     font-size: 10px;
     padding: 2px 8px;
     border-radius: 10px;

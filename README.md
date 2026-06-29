@@ -13,7 +13,8 @@ It allow to :
 
 ## Features
 
-- **Visual node management** — each tracked node is shown as a card with its name, git ref, description, and a "Install requirements" toggle. Click a card to mark it for install / uninstall; cards turn orange when the ref drifts from what's on disk and need a re-checkout. Double click on ref allow you to change the custom node version.
+- **Visual node management** — each tracked node is shown as a card with its name, git ref, description, and a "Install requirements" toggle. Click a card to mark it for install / uninstall. Double click on ref allow you to change the custom node version.
+- **Automatic update check** — on startup, the app fetches each installed node in the background and flags cards that are behind their remote branch with a yellow **"Need update"** badge. Click the card to arm it for update (turns amber **"To update"**), then press Update to pull the latest commits. Cards turn amber immediately when the configured ref drifts from what's on disk.
 - **Orphan detection** — custom nodes installed inside `ComfyUI/custom_nodes/` but not present in configuration show up as orphan cards. Select them to promote them into the tracked list.
 - **Add from workflow** — point the app at a ComfyUI workflow JSON. It diffs the workflow's node types against built-in nodes + currently installed custom nodes, and resolves the rest against the ComfyUI-Manager DB. Ambiguous types are surfaced via a conflict dialog.
 - **Bundle export** — produce either a portable ComfyUI folder or a single shareable self-installing `.bat`. Optionally trim the output to only the custom nodes (and models, in folder mode) referenced by selected workflows. Missing nodes are auto-cloned so the result boots without any extra setup.

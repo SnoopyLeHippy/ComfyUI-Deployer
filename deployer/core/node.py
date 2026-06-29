@@ -184,6 +184,29 @@ class CustomNode:
         # GitLab repos may not have the exact ref — don't fail hard on those.
         git_ops.checkout(self.ref, cwd=self.local_path, check=not self.is_gitlab)
 
+    def update(self) -> None:
+        """Bring an installed node up to date with its configured ref.
+
+        Checks out ``self.ref`` and, when that ref resolves to a branch (not a
+        detached tag / pinned commit), pulls the latest commits from origin.
+        Falls back to a full clone if the repo isn't on disk yet.
+        """
+        if self.has_gitlab_config_error:
+            raise RuntimeError(self.gitlab_config_error_message)
+        if not os.path.exists(self.local_path):
+            self.clone()
+            return
+
+        print(f"Checking out {self.ref}...")
+        git_ops.checkout(self.ref, cwd=self.local_path, check=not self.is_gitlab)
+
+        # Only pull when we're on a branch — pulling a detached tag/commit is
+        # meaningless and would error out.
+        branch = git_ops.get_current_branch(self.local_path)
+        if branch and branch != "HEAD":
+            print(f"Pulling latest changes on '{branch}'...")
+            git_ops.pull(self.local_path, check=not self.is_gitlab)
+
     def link(self) -> None:
         """Create a directory junction so ComfyUI can see a GitLab node."""
         if not self.is_gitlab:
@@ -211,3 +234,24 @@ class CustomNode:
             return head == target
         except subprocess.CalledProcessError:
             return True
+
+    def is_behind_remote(self) -> bool:
+        """Return ``True`` if the checked-out branch is behind its remote.
+
+        Fetches from origin and compares the local branch with its upstream;
+        a positive result means new commits are available to pull. Only
+        meaningful for nodes on a branch — tags, detached HEADs and pinned
+        commits are treated as always up to date.
+
+        Touches the network (fetch), so call this off the UI thread. Returns
+        ``False`` on any error so a transient failure never spuriously flags
+        a node as needing an update.
+        """
+        if not os.path.exists(self.local_path):
+            return False
+        branch = git_ops.get_current_branch(self.local_path)
+        if not branch or branch == "HEAD":
+            return False  # detached / tag / pinned commit — nothing to track
+        if not git_ops.fetch(self.local_path):
+            return False
+        return git_ops.is_behind_upstream(self.local_path)

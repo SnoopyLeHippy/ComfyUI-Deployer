@@ -157,6 +157,51 @@ def is_dirty(cwd: str) -> bool:
     return bool(result.stdout.strip())
 
 
+def fetch(cwd: str, *, timeout: int = 30) -> bool:
+    """Run ``git fetch`` in *cwd* to refresh remote-tracking refs.
+
+    Returns ``True`` on success, ``False`` on any error or timeout. Touches
+    the network, so call this off the UI thread.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "fetch", "--quiet"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except Exception:
+        return False
+    return result.returncode == 0
+
+
+def is_behind_upstream(cwd: str) -> bool:
+    """Return ``True`` if HEAD is behind its upstream branch (commits to pull).
+
+    Counts commits reachable from ``@{upstream}`` but not from ``HEAD``. Run
+    :func:`fetch` first so the comparison reflects the remote. Returns
+    ``False`` when there is no upstream tracking branch, HEAD is detached, or
+    git errors out — so a transient failure never spuriously flags a node.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-list", "--count", "HEAD..@{upstream}"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=_DEFAULT_TIMEOUT,
+            check=False,
+        )
+    except Exception:
+        return False
+    if result.returncode != 0:
+        return False
+    count = result.stdout.strip()
+    return count.isdigit() and int(count) > 0
+
+
 def pull(cwd: str, *, check: bool = True) -> None:
     """Run ``git pull`` inside *cwd*, streaming output."""
     _stream_cmd(["git", "pull"], cwd=cwd, check=check)

@@ -390,6 +390,7 @@ class CustomNodeDeployerApp(QMainWindow):
         self.card_grid.update_cols(self.scroll_area.viewport().width())
         # Check installed refs and discover orphan nodes in background
         threading.Thread(target=self._check_refs, daemon=True).start()
+        threading.Thread(target=self._check_node_updates, daemon=True).start()
         threading.Thread(target=self._discover_orphans, daemon=True).start()
 
     def _discover_orphans(self):
@@ -421,6 +422,26 @@ class CustomNodeDeployerApp(QMainWindow):
                     c.is_pending_update = True
                     c.refresh()
                     self._refresh_install_btn()
+                self._ui_call.emit(_mark)
+
+    def _check_node_updates(self):
+        """Background thread: fetch each installed node and flag those whose
+        branch is behind its remote as 'Need update'.
+
+        Touches the network (one ``git fetch`` per node), so it runs separately
+        from the fast, local-only ``_check_refs`` pass. A node already armed for
+        a ref-change "To update" is left as-is — that drift takes priority.
+        """
+        for card in list(self._node_cards):
+            node = card.node
+            if node.has_gitlab_config_error or not node.is_installed:
+                continue
+            if node.is_behind_remote():
+                def _mark(c=card):
+                    if c.is_pending_update or c.is_selected:
+                        return
+                    c.is_needs_update = True
+                    c.refresh()
                 self._ui_call.emit(_mark)
 
     def eventFilter(self, obj, event):
@@ -467,7 +488,7 @@ class CustomNodeDeployerApp(QMainWindow):
 
         for card in plan.to_update:
             print(f"Updating {card.node.name} to ref '{card.node.ref}'...")
-            card.node.clone()
+            card.node.update()
 
         install(plan.to_install, plan.with_requirements)
 
@@ -513,6 +534,7 @@ class CustomNodeDeployerApp(QMainWindow):
             card.is_selected = False
             card.node.is_selected = False
             card.is_pending_update = False
+            card.is_needs_update = False
             card.is_from_workflow = False
             card.node.is_install_requirements = False
             card.req_checkbox.setChecked(False)

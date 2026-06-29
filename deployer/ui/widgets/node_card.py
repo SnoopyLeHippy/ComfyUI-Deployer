@@ -27,6 +27,7 @@ class NodeCard(BaseCard):
     ):
         self.node = node
         self.is_pending_update = False
+        self.is_needs_update = False
         self._on_ref_saved = on_ref_saved
         self._on_remove = on_remove
 
@@ -88,6 +89,8 @@ class NodeCard(BaseCard):
             return CardState.TO_INSTALL
         if self.is_pending_update and node.is_installed:
             return CardState.TO_UPDATE
+        if self.is_needs_update and node.is_installed:
+            return CardState.NEED_UPDATE
         if node.is_installed:
             return CardState.INSTALLED
         return CardState.DEFAULT
@@ -96,6 +99,14 @@ class NodeCard(BaseCard):
         return not self.node.has_gitlab_config_error
 
     def _on_selection_toggled(self) -> None:
+        # Clicking a "Need update" card arms it for update rather than
+        # selecting the installed node for removal: flip it straight into the
+        # "To update" state and swallow the selection toggle.
+        if self.is_selected and self.is_needs_update and self.node.is_installed:
+            self.is_selected = False
+            self.is_needs_update = False
+            self.is_pending_update = True
+            return
         self.node.is_selected = self.is_selected
         # Entering / leaving "To install" auto-syncs the requirements checkbox
         # (only for not-yet-installed nodes; for installed nodes the checkbox

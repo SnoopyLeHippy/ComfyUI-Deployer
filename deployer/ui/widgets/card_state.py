@@ -18,6 +18,7 @@ class CardState(Enum):
     INSTALLED = auto()         # NodeCard, on disk and ref current
     TO_INSTALL = auto()        # NodeCard selected, not yet installed
     TO_UPDATE = auto()         # NodeCard installed, ref drift detected
+    NEED_UPDATE = auto()       # NodeCard installed, branch behind its remote
     TO_REMOVE = auto()         # NodeCard selected, currently installed
     IMPORT = auto()            # Card pulled in from a workflow import
     ERROR = auto()             # NodeCard with GitLab config error
@@ -46,6 +47,11 @@ _STATE_PRESENTATION: dict[CardState, tuple[str, str, str]] = {
         theme.NODE_CARD_TO_UPDATE_STYLE,
         "To update",
         theme.BADGE_TO_UPDATE_STYLE,
+    ),
+    CardState.NEED_UPDATE: (
+        theme.NODE_CARD_NEED_UPDATE_STYLE,
+        "Need update",
+        theme.BADGE_NEED_UPDATE_STYLE,
     ),
     CardState.TO_REMOVE: (
         theme.NODE_CARD_SELECTED_INSTALLED_STYLE,

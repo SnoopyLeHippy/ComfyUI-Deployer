@@ -7,6 +7,7 @@ removes the parallel implementations that used to live on
 :class:`CustomNodeDeployerApp`.
 """
 
+import os
 from dataclasses import dataclass, field
 
 from deployer.core.workflow_resolver import (
@@ -53,8 +54,11 @@ def resolve_workflows(workflow_paths: list[str], known_repos: set[str]) -> Workf
     """
     merged = WorkflowResolution()
     seen_resolved: set[str] = set()
+    total = len(workflow_paths)
 
-    for wf_path in workflow_paths:
+    for i, wf_path in enumerate(workflow_paths, 1):
+        if total > 1:
+            print(f"[{i}/{total}] Scanning {os.path.basename(wf_path)}...")
         resolved, conflicts, unresolved, repo_to_desc = resolve_workflow_nodes(wf_path, known_repos)
         for entry in resolved:
             if entry.repo in seen_resolved:

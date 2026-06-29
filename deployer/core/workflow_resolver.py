@@ -91,6 +91,7 @@ def _extract_mapping_keys(source: str) -> set[str]:
 
 def load_builtin_node_types() -> set[str]:
     """Node types registered by ComfyUI core (``nodes.py`` + ``comfy_extras``)."""
+    print("Scanning ComfyUI builtin node types...")
     builtins: set[str] = set()
     if os.path.exists(COMFYUI_NODES_PY):
         builtins.update(_extract_mapping_keys(_read_text(COMFYUI_NODES_PY)))
@@ -133,6 +134,7 @@ def load_installed_custom_node_types() -> set[str]:
     This lets us skip workflow types that are already satisfied by an
     installed-but-untracked (orphan) custom node.
     """
+    print("Scanning installed custom nodes...")
     types: set[str] = set()
     if not os.path.isdir(CUSTOM_NODES_DIR):
         return types
@@ -320,7 +322,10 @@ def resolve_workflow_nodes(
 
     candidates = sorted(workflow_types - builtins - installed - _FRONTEND_ONLY_TYPES)
     if not candidates:
+        print("All node types are already available.")
         return ([], [], [], {})
+
+    print(f"Checking {len(candidates)} missing node type(s) against the database...")
 
     extension_map = _load_fresh_json("extension-node-map.json", EXTENSION_NODE_MAP_URL)
     custom_node_list = _load_fresh_json("custom-node-list.json", CUSTOM_NODE_LIST_URL)

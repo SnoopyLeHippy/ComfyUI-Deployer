@@ -73,6 +73,14 @@ AMBER_SURFACE_END    = "#463315"
 AMBER_SURFACE_BORDER = "#CA7C0A"
 
 # ---------------------------------------------------------------------------
+# Accent — yellow (branch behind remote / "need update")
+# ---------------------------------------------------------------------------
+YELLOW_BADGE          = "#FFD600"
+YELLOW_SURFACE_MID    = "#33311a"
+YELLOW_SURFACE_END    = "#4a4510"
+YELLOW_SURFACE_BORDER = "#C9B40A"
+
+# ---------------------------------------------------------------------------
 # Accent — purple (workflow import)
 # ---------------------------------------------------------------------------
 PURPLE_BADGE          = "#9c27b0"
