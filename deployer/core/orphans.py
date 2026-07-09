@@ -15,8 +15,12 @@ from deployer.core import git_ops
 OrphanNode = tuple[str, str, str]  # (folder_name, remote_url, ref)
 
 
-def discover_orphan_nodes(known_node_names: set[str]) -> list[OrphanNode]:
-    """Return git-backed subdirectories of ``CUSTOM_NODES_DIR`` not in *known_node_names*.
+def _canonical_url(url: str) -> str:
+    return url.strip().rstrip("/").removesuffix(".git").lower()
+
+
+def discover_orphan_nodes(known_canonical_urls: set[str]) -> list[OrphanNode]:
+    """Return git-backed subdirectories of ``CUSTOM_NODES_DIR`` not in *known_canonical_urls*.
 
     Each tuple is ``(folder_name, remote_url, ref)``. Entries whose origin
     URL can't be read are skipped — there's nothing the user could do with
@@ -35,11 +39,11 @@ def discover_orphan_nodes(known_node_names: set[str]) -> list[OrphanNode]:
             continue
         if not os.path.exists(os.path.join(entry.path, ".git")):
             continue
-        if entry.name in known_node_names:
-            continue
 
         url = git_ops.get_remote_url(entry.path)
         if not url:
+            continue
+        if _canonical_url(url) in known_canonical_urls:
             continue
         ref = git_ops.describe_head(entry.path, fallback="HEAD")
         orphans.append((entry.name, url, ref))
