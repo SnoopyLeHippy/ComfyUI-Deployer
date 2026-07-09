@@ -395,8 +395,8 @@ class CustomNodeDeployerApp(QMainWindow):
 
     def _discover_orphans(self):
         """Background thread: find nodes installed in ComfyUI but not in user_settings."""
-        known_names = {os.path.basename(card.node.repo) for card in self._node_cards}
-        orphans = discover_orphan_nodes(known_names)
+        known_urls = {self._canonical_repo(card.node.repo) for card in self._node_cards}
+        orphans = discover_orphan_nodes(known_urls)
         for name, repo, ref in orphans:
             self._orphan_found.emit(name, repo, ref, "", False)
 
