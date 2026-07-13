@@ -10,6 +10,8 @@ import os
 import shutil
 import subprocess
 
+from deployer.core.filesystem import force_remove_readonly
+
 
 # Win32 namespace marker prepended by os.readlink to junction targets.
 _WIN32_NAMESPACE_PREFIX = "\\\\?\\"
@@ -53,14 +55,15 @@ def create_junction(link: str, target: str) -> None:
 
 
 def replace_with_junction(path: str, target: str) -> None:
-    """Replace the directory at *path* with a junction to *target*.
+    """Replace whatever is at *path* with a junction to *target*.
 
-    No-op if *path* is already a junction.
+    Works whether *path* is currently a real directory or an existing
+    junction (re-pointing it at the new *target*).
     """
     if is_junction(path):
-        return
-    if os.path.isdir(path):
-        shutil.rmtree(path)
+        os.rmdir(path)
+    elif os.path.isdir(path):
+        shutil.rmtree(path, onerror=force_remove_readonly)
     create_junction(path, target)
 
 

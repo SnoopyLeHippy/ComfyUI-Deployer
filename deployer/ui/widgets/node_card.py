@@ -1,11 +1,13 @@
 """Selectable card representing a single ComfyUI custom node."""
 
+import os
 import webbrowser
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction
-from PyQt6.QtWidgets import QLabel, QLineEdit, QMenu, QVBoxLayout
+from PyQt6.QtWidgets import QFileDialog, QLabel, QLineEdit, QMenu, QMessageBox, QVBoxLayout
 
+from deployer.core.junctions import replace_with_junction
 from deployer.core.node import CustomNode
 from deployer.ui import theme
 from deployer.ui.widgets.base_card import BaseCard
@@ -229,11 +231,32 @@ class NodeCard(BaseCard):
         menu = QMenu(self)
         menu.setStyleSheet(theme.HAMBURGER_MENU_STYLE)
         open_repo_action = QAction("Open repository...", self)
+        junction_action = QAction("Replace by junction...", self)
+        junction_action.setEnabled(self.node.is_installed)
         remove_action = QAction("Remove from config", self)
         menu.addAction(open_repo_action)
+        menu.addAction(junction_action)
         menu.addAction(remove_action)
         action = menu.exec(self.mapToGlobal(pos))
         if action == open_repo_action:
             webbrowser.open(self.node.web_url)
+        elif action == junction_action:
+            self._replace_by_junction()
         elif action == remove_action and self._on_remove:
             self._on_remove(self)
+
+    def _replace_by_junction(self) -> None:
+        """Delete the node's folder in custom_nodes and re-link it via a junction
+        to a folder the user picks (e.g. a checkout kept elsewhere on disk)."""
+        path = self.node.comfyui_path
+        target = QFileDialog.getExistingDirectory(self, "Select folder to link to")
+        if not target:
+            return
+        target = os.path.normpath(target)
+        if os.path.normpath(path) == target:
+            QMessageBox.warning(self, "Replace by junction", "Target can't be the node's own folder.")
+            return
+        replace_with_junction(path, target)
+        self.node.is_installed = os.path.exists(path)
+        print(f"{self.node.name}: replaced by junction -> {target}")
+        self.refresh()
