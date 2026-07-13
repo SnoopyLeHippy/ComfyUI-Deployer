@@ -52,7 +52,7 @@ class ComfyRunner:
 
     def _run(self) -> None:
         main_py = os.path.join(COMFYUI_DIR, "main.py")
-        cmd = [PYTHON_EXE, "-s", main_py, "--windows-standalone-build"]
+        cmd = [PYTHON_EXE, "-s", main_py, "--windows-standalone-build", "--enable-cors-header"]
         print(f"Starting ComfyUI: {' '.join(cmd)}")
         # Force the child's stdout/stderr to UTF-8. When ComfyUI's output is
         # redirected to our pipe (not a real console), Python otherwise picks

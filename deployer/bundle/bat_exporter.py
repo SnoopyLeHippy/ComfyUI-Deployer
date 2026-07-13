@@ -21,6 +21,7 @@ import base64
 import io
 import json
 import os
+import re
 import tarfile
 
 from deployer.bundle.comfyui_archive import get_comfyui_version
@@ -41,6 +42,7 @@ from deployer.settings import UserSettings
 
 BAT_FILENAME = "install_comfyui_bundle.bat"
 _LOCAL_PLUGINS_DIR = os.path.join(PROJECT_ROOT, "plugins")
+_REMOTE_PLUGINS_DIR = os.path.join(_LOCAL_PLUGINS_DIR, "remote")
 
 # Comfy-Org ships a versioned portable archive per release; fall back to the
 # upstream "latest" asset when we can't read a concrete version on disk.
@@ -358,6 +360,78 @@ def _render_bat(
     return "\r\n".join(lines)
 
 
+def _auto_plugin_repos_for_steps(
+    step_ids: set[str],
+    already_included: list[dict],
+) -> list[dict]:
+    """Return remote plugin repos needed by *step_ids* that are not yet in *already_included*.
+
+    Scans every ``plugins/remote/<name>/`` directory for a ``BundleStep``
+    subclass whose ``id`` matches one of *step_ids* (detected via a simple
+    regex on the source).  The repo URL is taken from ``user_settings.json``
+    when present; otherwise from the directory's git remote.
+    """
+    if not step_ids or not os.path.isdir(_REMOTE_PLUGINS_DIR):
+        return []
+
+    already_keys = {
+        r.get("repo", "").rstrip("/").removesuffix(".git").lower()
+        for r in already_included
+        if r.get("repo")
+    }
+
+    # Build name→{repo,ref} from the registered remote plugins list.
+    registered: dict[str, dict] = {
+        os.path.basename(r["repo"].rstrip("/").removesuffix(".git")): r
+        for r in UserSettings.load_plugin_repos()
+        if r.get("repo")
+    }
+
+    # Pattern that matches  id = "some_id"  or  id = 'some_id'  at class level.
+    id_pattern = re.compile(
+        r'\bid\s*=\s*["\'](' + "|".join(re.escape(s) for s in step_ids) + r')["\']'
+    )
+
+    result: list[dict] = []
+    for name in sorted(os.listdir(_REMOTE_PLUGINS_DIR)):
+        subdir = os.path.join(_REMOTE_PLUGINS_DIR, name)
+        if not os.path.isdir(subdir):
+            continue
+
+        # Try to resolve the repo entry: registered first, then git remote.
+        entry = registered.get(name)
+        if entry is None:
+            try:
+                repo_url = git_ops.get_remote_url(subdir)
+                if repo_url:
+                    ref = git_ops.get_current_branch(subdir) or "main"
+                    entry = {"repo": repo_url, "ref": ref}
+            except Exception:  # noqa: BLE001
+                pass
+        if entry is None:
+            continue
+
+        repo_key = entry["repo"].rstrip("/").removesuffix(".git").lower()
+        if repo_key in already_keys:
+            continue
+
+        # Check whether any .py file in this subdir provides one of the step IDs.
+        for fname in sorted(os.listdir(subdir)):
+            if not fname.endswith(".py") or fname.startswith("_"):
+                continue
+            fpath = os.path.join(subdir, fname)
+            try:
+                content = open(fpath, encoding="utf-8", errors="ignore").read()
+                if id_pattern.search(content):
+                    result.append(entry)
+                    already_keys.add(repo_key)
+                    break
+            except Exception:  # noqa: BLE001
+                pass
+
+    return result
+
+
 def create_sharable_bat(
     dest_dir: str,
     workflow_paths: list[str],
@@ -397,6 +471,21 @@ def create_sharable_bat(
         # Persisted as-is; the headless install replays the INSTALL-phase ones
         # on the recipient's machine (plugin modules ship with the cloned deployer).
         data["steps"] = steps
+
+    # Auto-supplement plugin_repos with any remote repos that provide the
+    # configured steps but weren't explicitly passed (e.g. the user forgot to
+    # tick the plugin in the Create Bundle dialog).
+    plugin_repos = list(plugin_repos or [])
+    if steps:
+        step_ids = {s["id"] for s in steps if s.get("id")}
+        extra = _auto_plugin_repos_for_steps(step_ids, plugin_repos)
+        if extra:
+            print(
+                f"Auto-detected {len(extra)} remote plugin repo(s) required by "
+                "the configured steps and added them to the bundle."
+            )
+            plugin_repos.extend(extra)
+
     if plugin_repos:
         data["plugins"] = {"remote": plugin_repos}
     extra_yaml_b64: str | None = None
