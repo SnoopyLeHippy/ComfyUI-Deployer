@@ -388,7 +388,12 @@ class CustomNodeDeployerApp(QMainWindow):
         self.card_grid.set_add_button(self.add_node_btn)
         # Trigger an initial layout based on the actual viewport width
         self.card_grid.update_cols(self.scroll_area.viewport().width())
-        # Check installed refs and discover orphan nodes in background
+        # Check installed refs and discover orphan nodes in background. Each
+        # installed card is checked by both passes below, so show its corner
+        # spinner until both have reported back.
+        for card in self._node_cards:
+            if card.node.is_installed:
+                card.begin_checking(2)
         threading.Thread(target=self._check_refs, daemon=True).start()
         threading.Thread(target=self._check_node_updates, daemon=True).start()
         threading.Thread(target=self._discover_orphans, daemon=True).start()
@@ -417,12 +422,14 @@ class CustomNodeDeployerApp(QMainWindow):
         for card in list(self._node_cards):
             if not card.node.is_installed:
                 continue
-            if not card.node.is_ref_current():
-                def _mark(c=card):
+            is_current = card.node.is_ref_current()
+            def _mark(c=card, is_current=is_current):
+                if not is_current:
                     c.is_pending_update = True
-                    c.refresh()
-                    self._refresh_install_btn()
-                self._ui_call.emit(_mark)
+                c.check_done()
+                c.refresh()
+                self._refresh_install_btn()
+            self._ui_call.emit(_mark)
 
     def _check_node_updates(self):
         """Background thread: fetch each installed node and flag those whose
@@ -436,13 +443,13 @@ class CustomNodeDeployerApp(QMainWindow):
             node = card.node
             if not node.is_installed:
                 continue
-            if node.is_behind_remote():
-                def _mark(c=card):
-                    if c.is_pending_update or c.is_selected:
-                        return
+            is_behind = node.is_behind_remote()
+            def _mark(c=card, is_behind=is_behind):
+                if is_behind and not c.is_pending_update and not c.is_selected:
                     c.is_needs_update = True
-                    c.refresh()
-                self._ui_call.emit(_mark)
+                c.check_done()
+                c.refresh()
+            self._ui_call.emit(_mark)
 
     def eventFilter(self, obj, event):
         if obj is self.scroll_area.viewport() and event.type() == QEvent.Type.Resize:
@@ -526,11 +533,22 @@ class CustomNodeDeployerApp(QMainWindow):
             self._save_user_settings()
 
         for card in self._node_cards:
+            was_installed = card.node.is_installed
             card.node.is_installed = os.path.exists(card.node.comfyui_path)
             card.is_selected = False
             card.node.is_selected = False
+            # is_pending_update covers every ref-drifted card, selected or not
+            # (see plan_install), so the install pass above has resolved it for
+            # all of them. is_needs_update is only cleared when install state
+            # actually flipped this pass (fresh install/uninstall stales it) —
+            # a "Need update" card only enters the plan if the user armed it
+            # (which already clears the flag in
+            # NodeCard._on_selection_toggled), so clearing it unconditionally
+            # here would wipe the status of untouched cards still behind
+            # their remote.
             card.is_pending_update = False
-            card.is_needs_update = False
+            if card.node.is_installed != was_installed:
+                card.is_needs_update = False
             card.is_from_workflow = False
             card.node.is_install_requirements = False
             card.req_checkbox.setChecked(False)

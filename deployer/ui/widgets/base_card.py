@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
 
 from deployer.ui import theme
 from deployer.ui.widgets.card_state import CardState, presentation_for
+from deployer.ui.widgets.spinner import Spinner
 
 
 # Insert a zero-width space after each underscore so Qt can wrap on them.
@@ -78,6 +79,12 @@ class BaseCard(QWidget):
         self._root.addStretch()
         self._root.addWidget(self.req_checkbox)
 
+        # Floats above the layout (not added to it) so it can sit in the
+        # bottom-right corner regardless of body content; repositioned on resize.
+        self._pending_checks = 0
+        self.spinner = Spinner(self)
+        self._position_spinner()
+
     # ------------------------------------------------------------------
     # Subclass hooks
     # ------------------------------------------------------------------
@@ -112,9 +119,29 @@ class BaseCard(QWidget):
         self.badge.setStyleSheet(badge_style)
         self.update()
 
+    def begin_checking(self, count: int = 1) -> None:
+        """Show the corner spinner; *count* background checks must call
+        :meth:`check_done` before it hides again."""
+        self._pending_checks += count
+        self.spinner.set_active(True)
+
+    def check_done(self) -> None:
+        """Signal that one of the checks registered via :meth:`begin_checking`
+        has finished; hides the spinner once all of them have."""
+        self._pending_checks = max(0, self._pending_checks - 1)
+        if self._pending_checks == 0:
+            self.spinner.set_active(False)
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    def _position_spinner(self) -> None:
+        margin = 10
+        self.spinner.move(
+            self.width() - self.spinner.width() - margin,
+            self.height() - self.spinner.height() - margin,
+        )
 
     def _build_header(self) -> None:
         header = QHBoxLayout()
@@ -145,6 +172,10 @@ class BaseCard(QWidget):
         opt.initFrom(self)
         painter = QPainter(self)
         self.style().drawPrimitive(QStyle.PrimitiveElement.PE_Widget, opt, painter, self)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_spinner()
 
     def enterEvent(self, event):
         if self._can_toggle_selection():
