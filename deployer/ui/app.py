@@ -243,6 +243,7 @@ class CustomNodeDeployerApp(QMainWindow):
 
         self.hamburger_menu = QMenu(self.menu_btn)
         self.hamburger_menu.setStyleSheet(theme.HAMBURGER_MENU_STYLE)
+        self.action_refresh_nodes = QAction("Refresh nodes", self)
         self.action_settings = QAction("Advanced settings...", self)
         self.action_repair_packages = QAction("Repair packages...", self)
         self.action_install_package = QAction("Install package...", self)
@@ -250,6 +251,8 @@ class CustomNodeDeployerApp(QMainWindow):
         self.action_export_config = QAction("Export Configuration...", self)
         self.action_create_bundle = QAction("Create Bundle...", self)
         self.action_manage_plugins = QAction("Manage Plugins...", self)
+        self.hamburger_menu.addAction(self.action_refresh_nodes)
+        self.hamburger_menu.addSeparator()
         self.hamburger_menu.addAction(self.action_settings)
         self.hamburger_menu.addAction(self.action_repair_packages)
         self.hamburger_menu.addAction(self.action_install_package)
@@ -259,6 +262,7 @@ class CustomNodeDeployerApp(QMainWindow):
         self.hamburger_menu.addSeparator()
         self.hamburger_menu.addAction(self.action_create_bundle)
         self.hamburger_menu.addAction(self.action_manage_plugins)
+        self.action_refresh_nodes.triggered.connect(self._on_force_refresh)
         self.action_settings.triggered.connect(self._on_advanced_settings)
         self.action_repair_packages.triggered.connect(self._on_repair_packages)
         self.action_install_package.triggered.connect(self._on_install_package)
@@ -466,11 +470,34 @@ class CustomNodeDeployerApp(QMainWindow):
         self.install_btn.set_busy(busy)
         self.install_btn.setDisabled(busy)
         self.run_comfy_btn.setDisabled(busy)
+        self.action_refresh_nodes.setEnabled(not busy)
         self.action_create_bundle.setEnabled(not busy)
         self.action_repair_packages.setEnabled(not busy)
         if not busy:
             # Re-derive Update button state from the current card selection.
             self._refresh_install_btn()
+
+    def _on_force_refresh(self):
+        """Re-run the ref-drift and behind-remote checks for every installed card."""
+        self.action_refresh_nodes.setEnabled(False)
+        installed = [card for card in self._node_cards if card.node.is_installed]
+        for card in installed:
+            card.is_pending_update = False
+            card.is_needs_update = False
+            card.refresh()
+            card.begin_checking(2)
+        print(f"Refreshing update status for {len(installed)} installed node(s)...")
+        threading.Thread(target=self._run_force_refresh, daemon=True).start()
+
+    def _run_force_refresh(self):
+        """Background thread: run both check passes to completion, then re-enable the menu action."""
+        refs_thread = threading.Thread(target=self._check_refs, daemon=True)
+        updates_thread = threading.Thread(target=self._check_node_updates, daemon=True)
+        refs_thread.start()
+        updates_thread.start()
+        refs_thread.join()
+        updates_thread.join()
+        self._ui_call.emit(lambda: self.action_refresh_nodes.setEnabled(True))
 
     def _on_install(self):
         self._set_busy(True)
