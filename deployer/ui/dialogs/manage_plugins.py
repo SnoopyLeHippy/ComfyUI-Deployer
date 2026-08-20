@@ -18,8 +18,7 @@ from PyQt6.QtWidgets import (
 )
 
 from deployer.config import PROJECT_ROOT
-from deployer.plugins import load_plugins
-from deployer.plugins.registry import _repo_dir_name
+from deployer.plugins import load_plugins, repo_dir_name
 from deployer.settings import UserSettings
 from deployer.ui import theme
 
@@ -246,7 +245,7 @@ class ManagePluginsDialog(QDialog):
     def _remote_plugin_entries(self) -> list[tuple[str, str, str, bool]]:
         """Return (name, repo, ref, on_disk) for every known remote plugin."""
         saved = {
-            _repo_dir_name(r["repo"]): r
+            repo_dir_name(r["repo"]): r
             for r in UserSettings.load_plugin_repos()
             if r.get("repo")
         }
@@ -336,7 +335,7 @@ class ManagePluginsDialog(QDialog):
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         repo, ref = dlg.values()
-        name = _repo_dir_name(repo)
+        name = repo_dir_name(repo)
         if not name:
             return
 

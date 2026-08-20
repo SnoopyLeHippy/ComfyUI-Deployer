@@ -6,9 +6,11 @@
 #  and it is auto-discovered by the deployer: it appears in the Create
 #  Bundle dialog under "Install steps" → "＋ Add step".
 #
-#  This folder is part of the repo, so a committed plugin ships with every
-#  bundle (the bundled deployer is a clone) and its INSTALL-phase steps run
-#  on the recipient's machine.
+#  This folder is gitignored (only this example and the README are tracked),
+#  so a plugin you drop here stays private. It still ships with every bundle
+#  you export — copied into <bundle>/plugins/ for a folder bundle, embedded as
+#  a base64 tar in a sharable .bat — and its INSTALL-phase steps then run on
+#  the recipient's machine.
 #
 #  A plugin must define a ``register(registry)`` entry point (or a
 #  ``BundleStep`` subclass). See deployer/plugins/api.py for the full

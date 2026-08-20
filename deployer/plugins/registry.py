@@ -115,7 +115,7 @@ def _discover_dir(directory: str) -> None:
             print(f"Failed to load plugin '{path}':\n{traceback.format_exc()}")
 
 
-def _repo_dir_name(repo: str) -> str:
+def repo_dir_name(repo: str) -> str:
     """Return the folder name for a remote plugin repo URL (same logic as custom nodes)."""
     return os.path.basename(repo.rstrip("/").removesuffix(".git"))
 
@@ -151,7 +151,7 @@ def sync_remote_plugins(
         ref = (entry or {}).get("ref", "main").strip() or "main"
         if not repo:
             continue
-        name = _repo_dir_name(repo)
+        name = repo_dir_name(repo)
         if not name:
             continue
         dest = os.path.join(_REMOTE_DIR, name)

@@ -116,10 +116,6 @@ INPUT_DIR = os.path.join(COMFYUI_DIR, "input")
 # Parent directory of the git repo — all sibling repos live here
 GITLAB_ROOT = _resolve_gitlab_root()
 COMFY_UI_SOURCE_DIR = os.path.join(GITLAB_ROOT, "comfy-ui", "ComfyUI")
-GENERATION_MODELS_DIR = os.path.join(GITLAB_ROOT, "generation-services", "models")
-
-# -- External resources -----------------------------------------------------
-COMFY_RESOURCES_OUTPUT = r"D:\ComfyRessources\output"
 
 # -- Custom-node JSON manifests --------------------------------------------
 SOURCE_NODES_JSON = os.path.join(COMFY_UI_SOURCE_DIR, "custom_nodes.json")

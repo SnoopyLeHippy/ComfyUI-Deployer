@@ -76,7 +76,7 @@ Plugins let you add custom steps to the bundle lifecycle — for example copying
 
 #### Local plugins (private, per-machine)
 
-Drop any `.py` file into the **`plugins/`** folder at the root of the repo. This folder is **gitignored** — its contents are private to your machine and never pushed to the remote. The deployer auto-discovers every `.py` file there; the steps they register appear in the Create Bundle wizard under **Install steps → ＋ Add step**.
+Drop any `.py` file into the **`plugins/`** folder at the root of the repo. This folder is **gitignored** (only its `README.md` and the disabled example are tracked), so the plugins you drop there stay private to your machine and are never pushed to the remote. The deployer auto-discovers every `.py` file there; the steps they register appear in the Create Bundle wizard under **Install steps → ＋ Add step**.
 
 When you export a bundle, local plugins travel with it automatically:
 - **`.bat` export** — plugin files are packed into a base64-encoded tar and extracted into `plugins/` before `headless_install` runs.

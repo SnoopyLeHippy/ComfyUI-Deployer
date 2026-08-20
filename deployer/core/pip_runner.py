@@ -32,7 +32,7 @@ def find_requirement_files(base: str, max_depth: int) -> list[str]:
 
 
 @functools.lru_cache(maxsize=8)
-def _uv_available(python_exe: str) -> bool:
+def uv_available(python_exe: str) -> bool:
     """Return True if *python_exe* can import the ``uv`` module."""
     try:
         proc = subprocess.run(
@@ -55,19 +55,19 @@ def ensure_uv(python_exe: str, *, stream_output: bool = True) -> bool:
     with CUDA enabled"). Installing uv keeps the install path identical to the
     main tool's. Returns True if uv is available afterwards.
     """
-    if _uv_available(python_exe):
+    if uv_available(python_exe):
         return True
     print("  uv not found in bundle python; installing uv...")
-    rc = _run([python_exe, "-m", "pip", "install", "uv"], stream_output=stream_output)
-    _uv_available.cache_clear()
+    rc = run_command([python_exe, "-m", "pip", "install", "uv"], stream_output=stream_output)
+    uv_available.cache_clear()
     if rc != 0:
         print(f"  uv install exited with code {rc}; falling back to pip.")
-    return _uv_available(python_exe)
+    return uv_available(python_exe)
 
 
 def _base_cmd(python_exe: str) -> tuple[list[str], str]:
     """Return (command prefix, human label) for the preferred installer."""
-    if _uv_available(python_exe):
+    if uv_available(python_exe):
         return (
             [python_exe, "-m", "uv", "pip", "install", "--python", python_exe, "--no-build-isolation"],
             "uv pip install",
@@ -87,7 +87,13 @@ def _display_path(path: str) -> str:
         return path
 
 
-def _run(cmd: list[str], *, stream_output: bool) -> int:
+def run_command(cmd: list[str], *, stream_output: bool) -> int:
+    """Run *cmd* and return its exit code.
+
+    With *stream_output* the merged stdout/stderr is printed line by line as it
+    arrives (so the UI console shows progress live); otherwise the output is
+    captured and discarded.
+    """
     if not stream_output:
         proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
         return proc.returncode
@@ -128,14 +134,14 @@ def install_requirement_files(
 
     pretty = " ".join(f"-r {_display_path(r)}" for r in req_files)
     print(f"  {label} {pretty}")
-    rc = _run(base + flat, stream_output=stream_output)
+    rc = run_command(base + flat, stream_output=stream_output)
     if rc == 0:
         return
 
     print(f"  Grouped install exited with code {rc}; retrying per file...")
     for req in req_files:
         print(f"  {label} -r {_display_path(req)}")
-        rc_one = _run(base + ["-r", req], stream_output=stream_output)
+        rc_one = run_command(base + ["-r", req], stream_output=stream_output)
         if rc_one != 0:
             print(f"  exited with code {rc_one} for {req}")
 
@@ -149,4 +155,4 @@ def install_packages(
     """Run ``(uv) pip install`` with arbitrary *args* (e.g. a local wheel)."""
     base, label = _base_cmd(python_exe)
     print(f"  {label} {' '.join(args)}")
-    return _run(base + args, stream_output=stream_output)
+    return run_command(base + args, stream_output=stream_output)

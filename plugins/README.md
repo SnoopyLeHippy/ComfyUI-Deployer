@@ -8,9 +8,19 @@ A step runs at bundle **creation** (author machine) and/or **install** (the
 recipient's machine, via the sharable `.bat`) — the plugin declares which via
 `phases` (`StepPhase.CREATE`, `StepPhase.INSTALL`, or `StepPhase.BOTH`).
 
-This folder is committed to the repo, so a plugin here ships inside every
-bundle (the bundled deployer is a clone) and its install-phase steps run on the
-recipient's machine.
+This folder is **gitignored** — only this README and the disabled example are
+tracked, so anything you drop here stays private to your machine and is never
+pushed.
+
+Your plugins still travel with every bundle you export, but through an explicit
+copy rather than the git clone: a folder bundle gets them copied into
+`<bundle>/plugins/`, and a sharable `.bat` embeds them as a base64 tar that is
+unpacked into `plugins/` before the headless install runs. Their install-phase
+steps then run on the recipient's machine.
+
+To share a plugin with other people instead of keeping it local, publish it as a
+git repo and add it under **☰ → Manage Plugins...** (remote plugins are cloned
+into `plugins/remote/`).
 
 ## Writing one
 

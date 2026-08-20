@@ -1,11 +1,12 @@
 """Dialog to configure and create a portable ComfyUI bundle.
 
-The dialog is a 4-step wizard:
+The dialog is a 5-step wizard:
 
-    1. Type        — .bat (default) vs folder
-    2. Destination — required, gates the Next button
-    3. Scope       — optional workflow filter
-    4. Options     — content adapts to the chosen Type
+    1. Type          — .bat (default) vs folder
+    2. Destination   — required, gates the Next button
+    3. Scope         — optional workflow filter
+    4. Options       — content adapts to the chosen Type
+    5. Install steps — optional plugin-contributed bundle steps
 
 Public accessors (``dest_path``, ``workflow_paths``, ``include_debugger``,
 ``include_models``, ``include_workflows``, ``export_as_bat``,
@@ -37,8 +38,7 @@ from PyQt6.QtWidgets import (
 )
 
 from deployer.config import PROJECT_ROOT
-from deployer.plugins import BundleFormat, load_plugins, registry
-from deployer.plugins.registry import _repo_dir_name
+from deployer.plugins import BundleFormat, load_plugins, registry, repo_dir_name
 from deployer.settings import UserSettings
 from deployer.ui import theme
 
@@ -82,7 +82,7 @@ _TEXTBOX_STYLE_PLUS2 = theme.DIALOG_TEXTBOX_STYLE + " QLineEdit { font-size: 14p
 
 
 class CreateBundleDialog(QDialog):
-    """4-step wizard to configure and create a portable ComfyUI bundle."""
+    """5-step wizard to configure and create a portable ComfyUI bundle."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -396,7 +396,7 @@ class CreateBundleDialog(QDialog):
             ref = entry.get("ref", "main")
             if not repo:
                 continue
-            name = _repo_dir_name(repo)
+            name = repo_dir_name(repo)
             cb = QCheckBox(name)
             cb.setStyleSheet(theme.CHECKBOX_STYLE)
             cb.setChecked(prev_checked.get(name, True))  # default: include

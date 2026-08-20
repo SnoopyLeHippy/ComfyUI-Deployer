@@ -202,23 +202,6 @@ QWidget#nodeCard QCheckBox {
 }
 """)
 
-NODE_CARD_ERROR_STYLE = _qss("""
-QWidget#nodeCard {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 %(surface_input)s,
-        stop:0.45 %(error_surface_mid)s,
-        stop:1 %(error_surface_end)s);
-    border-radius: 8px;
-    border: 1px solid %(error_surface_border)s;
-}
-QWidget#nodeCard QLabel {
-    background-color: transparent;
-}
-QWidget#nodeCard QCheckBox {
-    background-color: transparent;
-}
-""")
-
 NODE_CARD_ORPHAN_STYLE = _qss("""
 QWidget#nodeCard {
     background-color: %(surface_button)s;
@@ -345,17 +328,6 @@ QLabel {
 BADGE_TO_REMOVE_STYLE = _qss("""
 QLabel {
     background-color: %(red_remove_badge)s;
-    color: %(text_primary)s;
-    font-size: 10px;
-    padding: 2px 8px;
-    border-radius: 10px;
-    font-weight: bold;
-}
-""")
-
-BADGE_ERROR_STYLE = _qss("""
-QLabel {
-    background-color: %(error_badge)s;
     color: %(text_primary)s;
     font-size: 10px;
     padding: 2px 8px;

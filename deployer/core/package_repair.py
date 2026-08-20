@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 
 from deployer.config import COMFYUI_DIR, CUSTOM_NODES_DIR, PYTHON_EXE
 from deployer.core.filesystem import force_remove_readonly
-from deployer.core.pip_runner import _run, _uv_available, ensure_uv
+from deployer.core.pip_runner import ensure_uv, run_command, uv_available
 
 
 # Packages whose reinstall risks pulling a CPU-only wheel from PyPI or
@@ -106,7 +106,7 @@ def run_pip_check(python_exe: str = PYTHON_EXE) -> list[BrokenPackage]:
     actionable target — reinstalling it is what fixes the dep graph.
     """
     ensure_uv(python_exe, stream_output=False)
-    if not _uv_available(python_exe):
+    if not uv_available(python_exe):
         print("  uv unavailable; skipping pip check pass.")
         return []
 
@@ -1164,4 +1164,4 @@ def reinstall_packages(
         label = "pip install --force-reinstall --no-deps " + " ".join(requirements)
 
     print(f"  {label}")
-    return _run(cmd, stream_output=stream_output)
+    return run_command(cmd, stream_output=stream_output)

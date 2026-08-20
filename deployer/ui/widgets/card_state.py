@@ -21,7 +21,6 @@ class CardState(Enum):
     NEED_UPDATE = auto()       # NodeCard installed, branch behind its remote
     TO_REMOVE = auto()         # NodeCard selected, currently installed
     IMPORT = auto()            # Card pulled in from a workflow import
-    ERROR = auto()             # NodeCard with GitLab config error
     MISSING = auto()           # OrphanNodeCard, default appearance
     ADD_TO_CONFIG = auto()     # OrphanNodeCard selected for promotion
 
@@ -62,11 +61,6 @@ _STATE_PRESENTATION: dict[CardState, tuple[str, str, str]] = {
         theme.NODE_CARD_IMPORT_STYLE,
         "Import",
         theme.BADGE_IMPORT_STYLE,
-    ),
-    CardState.ERROR: (
-        theme.NODE_CARD_ERROR_STYLE,
-        "error",
-        theme.BADGE_ERROR_STYLE,
     ),
     CardState.MISSING: (
         theme.NODE_CARD_ORPHAN_STYLE,
