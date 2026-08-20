@@ -111,6 +111,8 @@ EXTRA_MODEL_PATHS_YAML = os.path.join(COMFYUI_DIR, "extra_model_paths.yaml")
 MODELS_DIR = os.path.join(COMFYUI_DIR, "models")
 OUTPUT_DIR = os.path.join(COMFYUI_DIR, "output")
 INPUT_DIR = os.path.join(COMFYUI_DIR, "input")
+UPDATE_DIR = os.path.join(PORTABLE_DIR, "update")
+UPDATE_COMFYUI_BAT = os.path.join(UPDATE_DIR, "update_comfyui.bat")
 
 # -- Gitlab workspace layout -----------------------------------------------
 # Parent directory of the git repo — all sibling repos live here

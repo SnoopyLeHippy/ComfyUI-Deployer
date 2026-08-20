@@ -51,6 +51,7 @@ deployer/
     http.py                      Download with PowerShell fallback (broken SSL)
     filesystem.py                shutil.rmtree read-only helper
     comfy_runner.py              Starts/stops the ComfyUI subprocess
+    comfy_update.py              Runs ComfyUI's update_comfyui.bat, preserving the junctions
   bundle/                        Export generation (folder or .bat)
     builder.py                   create_bundle() — folder-bundle orchestrator
     bat_exporter.py              create_sharable_bat() — generates the self-installing .bat
@@ -127,6 +128,19 @@ ComfyUI-Manager DB (`extension-node-map.json` + `custom-node-list.json`, always
 re-downloaded, falling back to the local cache when offline). Returns 3
 categories: `resolved` (a single candidate repo, auto-added), `conflicts`
 (several repos → picker dialog), `unresolved` (not found in the DB).
+
+### ComfyUI update (core/comfy_update.py)
+"Update ComfyUI..." in the hamburger menu runs the portable's own
+`update/update_comfyui.bat` (with a dummy argument, so its trailing `pause`
+doesn't hang the pipe). That script stashes ComfyUI's working tree and checks
+`master` back out — and since `models/`, `output/` and `input/` are *tracked*
+directories in the ComfyUI repo, the checkout destroys the junctions placed
+there. `update_comfyui()` therefore snapshots the junction targets **from disk**
+(`read_junction_target`, not `user_settings.json`, so hand-made junctions are
+covered too), detaches them before launching the updater — otherwise git writes
+its `put_*_here` placeholders straight into the user's external folders — and
+re-creates them in a `finally`, replacing the placeholder directories the
+checkout left behind.
 
 ### Package repair (core/package_repair.py — the largest file)
 5 complementary passes to diagnose a broken `python_embeded`:

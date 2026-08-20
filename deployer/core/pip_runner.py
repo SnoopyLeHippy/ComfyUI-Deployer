@@ -87,15 +87,15 @@ def _display_path(path: str) -> str:
         return path
 
 
-def run_command(cmd: list[str], *, stream_output: bool) -> int:
-    """Run *cmd* and return its exit code.
+def run_command(cmd: list[str], *, stream_output: bool, cwd: str | None = None) -> int:
+    """Run *cmd* (optionally from *cwd*) and return its exit code.
 
     With *stream_output* the merged stdout/stderr is printed line by line as it
     arrives (so the UI console shows progress live); otherwise the output is
     captured and discarded.
     """
     if not stream_output:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False, cwd=cwd)
         return proc.returncode
 
     proc = subprocess.Popen(
@@ -105,6 +105,7 @@ def run_command(cmd: list[str], *, stream_output: bool) -> int:
         text=True,
         encoding="utf-8",
         errors="replace",
+        cwd=cwd,
     )
     assert proc.stdout is not None
     for line in proc.stdout:

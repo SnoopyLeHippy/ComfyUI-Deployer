@@ -32,6 +32,7 @@ from PyQt6.QtWidgets import (
 from deployer.bundle import create_bundle, create_sharable_bat
 from deployer.config import CUSTOM_NODES_DIR, PROJECT_ROOT, PYTHON_EXE
 from deployer.core.comfy_runner import ComfyRunner
+from deployer.core.comfy_update import snapshot_junctions, update_comfyui
 from deployer.core import git_ops
 from deployer.core.filesystem import force_remove_readonly
 from deployer.core.installer import (
@@ -244,6 +245,7 @@ class CustomNodeDeployerApp(QMainWindow):
         self.hamburger_menu = QMenu(self.menu_btn)
         self.hamburger_menu.setStyleSheet(theme.HAMBURGER_MENU_STYLE)
         self.action_refresh_nodes = QAction("Refresh nodes", self)
+        self.action_update_comfyui = QAction("Update ComfyUI...", self)
         self.action_settings = QAction("Advanced settings...", self)
         self.action_repair_packages = QAction("Repair packages...", self)
         self.action_install_package = QAction("Install package...", self)
@@ -253,6 +255,7 @@ class CustomNodeDeployerApp(QMainWindow):
         self.action_manage_plugins = QAction("Manage Plugins...", self)
         self.hamburger_menu.addAction(self.action_refresh_nodes)
         self.hamburger_menu.addSeparator()
+        self.hamburger_menu.addAction(self.action_update_comfyui)
         self.hamburger_menu.addAction(self.action_settings)
         self.hamburger_menu.addAction(self.action_repair_packages)
         self.hamburger_menu.addAction(self.action_install_package)
@@ -263,6 +266,7 @@ class CustomNodeDeployerApp(QMainWindow):
         self.hamburger_menu.addAction(self.action_create_bundle)
         self.hamburger_menu.addAction(self.action_manage_plugins)
         self.action_refresh_nodes.triggered.connect(self._on_force_refresh)
+        self.action_update_comfyui.triggered.connect(self._on_update_comfyui)
         self.action_settings.triggered.connect(self._on_advanced_settings)
         self.action_repair_packages.triggered.connect(self._on_repair_packages)
         self.action_install_package.triggered.connect(self._on_install_package)
@@ -473,6 +477,7 @@ class CustomNodeDeployerApp(QMainWindow):
         self.action_refresh_nodes.setEnabled(not busy)
         self.action_create_bundle.setEnabled(not busy)
         self.action_repair_packages.setEnabled(not busy)
+        self.action_update_comfyui.setEnabled(not busy)
         if not busy:
             # Re-derive Update button state from the current card selection.
             self._refresh_install_btn()
@@ -581,6 +586,60 @@ class CustomNodeDeployerApp(QMainWindow):
             card.req_checkbox.setChecked(False)
             card.refresh()
         self._set_busy(False)
+
+    def _on_update_comfyui(self):
+        """Run ComfyUI's own updater, restoring the folder junctions afterwards.
+
+        ComfyUI must be stopped first: the updater checks the working tree out
+        from under a running instance.
+        """
+        if self._comfy_runner.is_running():
+            QMessageBox.warning(
+                self,
+                "ComfyUI is running",
+                "Stop ComfyUI before updating it.",
+            )
+            return
+
+        junctions = snapshot_junctions()
+        details = ""
+        if junctions:
+            listing = "\n".join(
+                f"  • {os.path.basename(path)} → {target}"
+                for path, target in junctions.items()
+            )
+            details = (
+                "These junctions will be detached during the update and "
+                f"restored right after:\n{listing}\n\n"
+            )
+        answer = QMessageBox.question(
+            self,
+            "Update ComfyUI",
+            "Run ComfyUI's updater (update_comfyui.bat)?\n\n"
+            "It stashes any local change to the ComfyUI repo, creates a backup "
+            "branch and pulls the latest master.\n\n"
+            + details
+            + "Restart ComfyUI Deployer once it's done.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        self._set_busy(True)
+        threading.Thread(target=self._run_update_comfyui, daemon=True).start()
+
+    def _run_update_comfyui(self) -> None:
+        try:
+            rc = update_comfyui()
+            if rc == 0:
+                print("ComfyUI update complete. Restart the Deployer to pick it up.")
+            elif rc > 0:
+                print(f"ComfyUI update finished with non-zero exit code: {rc}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"Error during ComfyUI update: {exc}")
+        finally:
+            self._clear_busy()
 
     def _on_advanced_settings(self):
         """Open the Advanced Settings dialog and apply changes on OK."""
