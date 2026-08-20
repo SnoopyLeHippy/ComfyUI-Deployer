@@ -1,4 +1,4 @@
-﻿# ComfyUI Deployer
+# ComfyUI Deployer
 
 A desktop app for managing custom nodes/intalls for [ComfyUI](https://github.com/Comfy-Org/ComfyUI/). 
 It allow to : 

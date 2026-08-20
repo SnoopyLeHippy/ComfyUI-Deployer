@@ -1,4 +1,4 @@
-﻿"""Centralized path constants and configuration for ComfyUI node management."""
+"""Centralized path constants and configuration for ComfyUI node management."""
 
 import configparser
 import os

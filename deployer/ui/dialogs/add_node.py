@@ -1,4 +1,4 @@
-﻿"""Dialog for adding a new custom-node entry to the user's settings."""
+"""Dialog for adding a new custom-node entry to the user's settings."""
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (

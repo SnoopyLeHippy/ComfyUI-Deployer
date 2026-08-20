@@ -1,4 +1,4 @@
-﻿"""Top-level orchestrator for building a portable ComfyUI bundle."""
+"""Top-level orchestrator for building a portable ComfyUI bundle."""
 
 import os
 import shutil

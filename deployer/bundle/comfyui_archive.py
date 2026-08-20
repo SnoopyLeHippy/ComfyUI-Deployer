@@ -1,4 +1,4 @@
-﻿"""Read the installed ComfyUI version and download a clean bundle archive."""
+"""Read the installed ComfyUI version and download a clean bundle archive."""
 
 import os
 import shutil

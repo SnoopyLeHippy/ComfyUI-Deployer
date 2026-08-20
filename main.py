@@ -1,4 +1,4 @@
-﻿"""Entry point for the ComfyUI custom node manager GUI."""
+"""Entry point for the ComfyUI custom node manager GUI."""
 
 import os
 import sys

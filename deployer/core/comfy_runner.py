@@ -1,4 +1,4 @@
-﻿"""Lifecycle management for the ComfyUI subprocess.
+"""Lifecycle management for the ComfyUI subprocess.
 
 Exposed as a tiny class so the UI doesn't have to know about ``Popen``,
 threads, or stdout pumping. Output goes through ``print``, which the UI

@@ -1,4 +1,4 @@
-﻿"""Discovery of custom-node directories that exist on disk but aren't tracked.
+"""Discovery of custom-node directories that exist on disk but aren't tracked.
 
 A node is an *orphan* when its folder lives under ``CUSTOM_NODES_DIR`` and
 contains a ``.git`` directory, yet its name is missing from the user's

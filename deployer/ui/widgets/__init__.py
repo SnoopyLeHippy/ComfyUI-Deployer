@@ -1,4 +1,4 @@
-﻿"""Reusable Qt widgets used by the manager UI."""
+"""Reusable Qt widgets used by the manager UI."""
 
 from deployer.ui.widgets.add_button import AddNodeButton  # noqa: F401
 from deployer.ui.widgets.busy_button import BusyButton  # noqa: F401

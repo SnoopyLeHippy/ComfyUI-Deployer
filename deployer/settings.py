@@ -1,4 +1,4 @@
-﻿"""Persistence layer for ``user_settings.json``.
+"""Persistence layer for ``user_settings.json``.
 
 All read/write access to the project's user settings file lives here so the
 on-disk schema is owned by a single module. The file format is::

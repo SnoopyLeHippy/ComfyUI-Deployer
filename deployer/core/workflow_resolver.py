@@ -1,4 +1,4 @@
-﻿"""Resolve workflow node types to the git repositories that provide them.
+"""Resolve workflow node types to the git repositories that provide them.
 
 Given a ComfyUI workflow JSON, this module returns the set of custom-node
 git repos required to load it. Built-in nodes (registered in ComfyUI's own

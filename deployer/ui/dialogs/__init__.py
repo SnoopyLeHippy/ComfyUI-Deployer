@@ -1,4 +1,4 @@
-﻿"""Modal dialogs used by the deployer UI."""
+"""Modal dialogs used by the deployer UI."""
 
 from deployer.ui.dialogs.add_node import AddNodeDialog  # noqa: F401
 from deployer.ui.dialogs.manage_plugins import ManagePluginsDialog  # noqa: F401

@@ -1,4 +1,4 @@
-﻿"""Circular '+' button shown at the end of the card grid."""
+"""Circular '+' button shown at the end of the card grid."""
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QCursor, QFont, QFontMetrics, QPainter

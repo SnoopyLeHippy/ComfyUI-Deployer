@@ -1,4 +1,4 @@
-﻿"""Reusable labelled path-picker row with Browse and Clear buttons."""
+"""Reusable labelled path-picker row with Browse and Clear buttons."""
 
 import os
 

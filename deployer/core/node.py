@@ -1,4 +1,4 @@
-﻿"""Data model for a ComfyUI custom node."""
+"""Data model for a ComfyUI custom node."""
 
 import os
 import subprocess

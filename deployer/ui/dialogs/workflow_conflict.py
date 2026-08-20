@@ -1,4 +1,4 @@
-﻿"""Dialog to resolve ambiguous node-to-repo mappings found during workflow import."""
+"""Dialog to resolve ambiguous node-to-repo mappings found during workflow import."""
 
 import os
 

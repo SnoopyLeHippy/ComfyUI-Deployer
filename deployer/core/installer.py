@@ -1,4 +1,4 @@
-﻿"""Installation logic for ComfyUI custom nodes and their dependencies."""
+"""Installation logic for ComfyUI custom nodes and their dependencies."""
 
 import json
 import os

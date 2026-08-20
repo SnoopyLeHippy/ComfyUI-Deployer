@@ -1,4 +1,4 @@
-﻿"""Info dialog shown when a loaded configuration is missing locally tracked nodes."""
+"""Info dialog shown when a loaded configuration is missing locally tracked nodes."""
 
 from PyQt6.QtWidgets import (
     QDialog,

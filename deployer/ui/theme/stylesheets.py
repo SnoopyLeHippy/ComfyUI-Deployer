@@ -1,4 +1,4 @@
-﻿"""Qt Style Sheets for the ComfyUI Custom Node Deployer.
+"""Qt Style Sheets for the ComfyUI Custom Node Deployer.
 
 All style strings used by widgets and dialogs live here so the colour palette
 in :mod:`deployer.ui.theme.palette` remains the single source of truth.

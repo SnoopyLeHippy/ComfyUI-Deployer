@@ -1,4 +1,4 @@
-﻿"""Main window for the ComfyUI Deployer."""
+"""Main window for the ComfyUI Deployer."""
 
 import datetime
 import json

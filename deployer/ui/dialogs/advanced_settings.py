@@ -1,4 +1,4 @@
-﻿"""Advanced settings dialog: extra model paths and folder junctions."""
+"""Advanced settings dialog: extra model paths and folder junctions."""
 
 import os
 import shutil
