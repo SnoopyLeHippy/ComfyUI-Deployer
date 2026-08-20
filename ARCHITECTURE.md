@@ -8,7 +8,7 @@ have to be re-read on every intervention. Keep it up to date (see `CLAUDE.md`).
 
 A PyQt6 desktop application (Windows only) that manages the installation, update
 and export ("bundle") of a portable ComfyUI install and its custom nodes.
-~10,300 lines of Python across 60 files.
+~11,300 lines of Python across 66 files.
 
 Three uses coexist in the same tool:
 1. **Custom-node manager** — card grid, install/update/remove, detection of
@@ -17,7 +17,7 @@ Three uses coexist in the same tool:
    everything on the recipient's machine) or a full portable folder (heavy, can
    include models).
 3. **Plugin system** — adds custom steps to the bundle lifecycle (e.g. copying
-   models from a shared folder).
+   models from a shared folder) and custom buttons to the main window.
 
 ## Stack and environment
 
@@ -41,6 +41,7 @@ deployer/
   core/                          Pure business logic (NO Qt import)
     node.py                      CustomNode — a node's model (clone/update/ref)
     git_ops.py                   Subprocess wrappers around `git`
+    command_runner.py            stream_command() — run a process, stream its output line by line
     installer.py                 Orchestrates node install + requirements
     orphans.py                   Detects untracked custom_nodes directories
     workflow_io.py               Extracts the workflow graph (JSON or PNG/WebP/JPEG image)
@@ -61,14 +62,16 @@ deployer/
     model_copier.py              Selective copy of referenced models
     project_copier.py            Clones the Deployer itself into the bundle
     workflow_parser.py           Extracts node types + model refs from a workflow
-  plugins/                       Bundle-lifecycle extension system
-    api.py                       Public contract (BundleStep, StepContext, StepPhase) — zero PyQt
-    registry.py                  Discovery/loading (builtin, local, remote)
+  plugins/                       Extension system (bundle lifecycle + main window)
+    api.py                       Bundle contract (BundleStep, StepContext, StepPhase) — zero PyQt
+    actions.py                   UI contract (UiAction, CommandAction, ActionContext) — zero PyQt
+    registry.py                  Discovery/loading (builtin, local, remote) of steps + actions
     runner.py                    Runs the configured steps for a given phase
     builtin/                     Empty by design (infrastructure provided, no opinionated steps)
     examples/                    Reference plugin, never auto-loaded
   ui/
-    app.py                       Main window (1360 lines) — the central hub
+    app.py                       Main window — the central hub
+    plugin_actions.py            PluginActionBar — renders plugin UiActions as buttons / menu entries
     controllers/                 Testable logic extracted from app.py (install_planner, workflow_resolution)
     dialogs/                     Modal windows
     widgets/                     Cards, grid, busy button, spinner, console
@@ -158,13 +161,39 @@ the UI: reinstalling them can break the bundle's CUDA build.
 
 ### Plugin system (deployer/plugins/)
 A plugin is a `.py` module exposing `register(registry)` (or an auto-detected
-`BundleStep` subclass). Discovered in 3 locations: `builtin/` (empty by design),
-`<root>/plugins/` (local, private), `<root>/plugins/remote/<name>/` (cloned git
-repos). A step declares its `phase` (CREATE = author's machine / INSTALL =
-recipient's machine) and its `bundle_formats` (BAT/FOLDER/BOTH).
+`BundleStep` / `UiAction` subclass). Discovered in 3 locations: `builtin/`
+(empty by design), `<root>/plugins/` (local, private),
+`<root>/plugins/remote/<name>/` (cloned git repos).
+
+A plugin contributes two independent kinds of thing, held in the same registry:
+
+* **Bundle steps** (`api.py`) — a step declares its `phase` (CREATE = author's
+  machine / INSTALL = recipient's machine) and its `bundle_formats`
+  (BAT/FOLDER/BOTH), and is persisted per-bundle in `user_settings.json`
+  under `steps`.
+* **UI actions** (`actions.py`) — a `UiAction` becomes a button in the main
+  window's bottom row (`ActionLocation.TOOLBAR`) or an entry in the hamburger
+  menu (`ActionLocation.MENU`), and runs a custom command against the *local*
+  install. `CommandAction` is the declarative shortcut: a `command` string (or
+  argv list) and a `cwd_key` naming an `ActionContext` path, no `run()` needed.
+  Nothing about actions is persisted — the registry is the single source of
+  truth, so the buttons follow whatever plugins are on disk.
 
 Local plugins travel into bundles through an **explicit copy** (folder) or an
-**embedded base64 tar** (`.bat`), not through the Deployer's git clone.
+**embedded base64 tar** (`.bat`), not through the Deployer's git clone — so a
+plugin's buttons show up in the recipient's deployer too.
+
+`ui/plugin_actions.py` (`PluginActionBar`) is the **only** module that knows
+both the action contract and Qt. It builds the widgets, runs each action on a
+worker thread by default (`background = True`), and reports a raised exception
+to the console instead of letting it kill the app. It is rebuilt on three
+events: startup, the end of the background remote-plugin sync, and the closing
+of the Manage Plugins dialog.
+
+An action's enabled state is computed in one place (`_apply_enabled`) from two
+inputs: it is running, or the window is busy *and* the action declares
+`blocked_when_busy` (the default — an action that only reads, like opening a
+folder, opts out and stays clickable during an install).
 
 ## Invariants not to break
 
@@ -172,12 +201,13 @@ Local plugins travel into bundles through an **explicit copy** (folder) or an
   what lets `headless_install.py` run without Qt and keeps these modules
   testable.
 - A plugin **never imports PyQt at module level** — lazy-import inside
-  `build_widget()` only.
+  `build_widget()` only. A `UiAction` never imports PyQt *at all*: rendering it
+  is `ui/plugin_actions.py`'s job.
 - `UserSettings` accessors preserve the keys they don't own.
-- `plugins/` is gitignored **except** `README.md` and
-  `example_copy_models_from_root.py`. The `.gitignore` uses `plugins/*` (not
-  `plugins/`) because git cannot re-include a file whose parent directory is
-  excluded.
+- `plugins/` is gitignored **except** `README.md`,
+  `example_copy_models_from_root.py` and `example_ui_actions.py`. The
+  `.gitignore` uses `plugins/*` (not `plugins/`) because git cannot re-include
+  a file whose parent directory is excluded.
 
 ## Legacy: dual GitLab / GitHub surface
 
@@ -204,13 +234,17 @@ the referenced model files.
   without a Qt dependency, so they're testable as-is (`plan_install`,
   `resolve_workflows`, `workflow_resolver`, `node.py`). The project currently has
   no tests at all.
+- **`deployer/plugins/builtin/` is still empty.** Now that a plugin can also
+  contribute buttons, a couple of obviously-useful ones (open the ComfyUI
+  folder, open the log) would be candidates — at the cost of the "no
+  opinionated steps shipped" stance.
 - **Duplicated repo-URL-to-directory-name computation**:
   `os.path.basename(repo.rstrip("/").removesuffix(".git"))` is rewritten
   identically in `bundle/builder.py`, `bundle/bat_exporter.py` (×2),
   `bundle/headless_install.py` and `core/orphans.py` (as the `_canonical_url`
   variant). `deployer.plugins.repo_dir_name` does exactly this and is now public —
   those call sites could use it.
-- **`ui/app.py` is 1360 lines** and concentrates a lot of responsibilities (grid,
+- **`ui/app.py` is ~1,490 lines** and concentrates a lot of responsibilities (grid,
   threads, workflow resolution, bundling, config I/O). Both controllers have
   already been extracted; the move could continue if the file becomes painful to
   evolve.

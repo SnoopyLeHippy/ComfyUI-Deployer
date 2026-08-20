@@ -8,6 +8,8 @@ rather than being scattered across the data model and the UI layer.
 import subprocess
 import sys
 
+from deployer.core.command_runner import stream_command
+
 
 _DEFAULT_TIMEOUT = 5  # seconds, for read-only git queries
 
@@ -15,41 +17,13 @@ _DEFAULT_TIMEOUT = 5  # seconds, for read-only git queries
 def _stream_cmd(cmd: list, cwd: str, check: bool = True) -> None:
     """Run *cmd* and forward merged stdout+stderr to sys.stdout in real-time.
 
-    Handles both \\n and \\r line endings so git progress bars ("Receiving
-    objects: 34%\\r") each print as a separate line in the console widget.
+    Delegates the reading loop to :func:`deployer.core.command_runner.stream_command`
+    (which splits on carriage returns too, so git progress bars each land on
+    their own console line); only the ``check`` semantics are added on top.
     """
-    with subprocess.Popen(
-        cmd,
-        cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,  # merge so we catch git's progress on stderr
-        bufsize=0,
-    ) as proc:
-        buf = b""
-        while True:
-            chunk = proc.stdout.read(256)
-            if not chunk:
-                break
-            buf += chunk
-            # Flush every complete segment delimited by \r\n, \n, or \r
-            while buf:
-                for sep in (b"\r\n", b"\n", b"\r"):
-                    pos = buf.find(sep)
-                    if pos != -1:
-                        line = buf[:pos].decode("utf-8", errors="replace").rstrip()
-                        if line:
-                            print(line, flush=True)
-                        buf = buf[pos + len(sep):]
-                        break
-                else:
-                    break  # no separator found yet — wait for more data
-        if buf:
-            line = buf.decode("utf-8", errors="replace").rstrip()
-            if line:
-                print(line, flush=True)
-
-    if check and proc.returncode != 0:
-        raise subprocess.CalledProcessError(proc.returncode, cmd)
+    returncode = stream_command(cmd, cwd=cwd)
+    if check and returncode != 0:
+        raise subprocess.CalledProcessError(returncode, cmd)
 
 
 def clone(url: str, dest: str, cwd: str, *, recursive: bool = True, check: bool = True) -> None:

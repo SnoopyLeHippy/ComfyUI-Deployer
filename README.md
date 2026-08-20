@@ -72,7 +72,12 @@ Add nodes from the `+` button
 
 ### Plugins
 
-Plugins let you add custom steps to the bundle lifecycle — for example copying models from a shared folder, patching config files, or running arbitrary scripts on the recipient's machine.
+Plugins extend the deployer in two ways:
+
+- **Bundle steps** — custom steps in the bundle lifecycle: copying models from a shared folder, patching config files, or running arbitrary scripts on the recipient's machine.
+- **UI actions** — custom buttons in the main window (or entries in the `☰` menu) that run whatever command you want against your local install. See [Custom buttons](#custom-buttons-ui-actions) below.
+
+Both are discovered the same way, and a single plugin file can contribute either or both.
 
 #### Local plugins (private, per-machine)
 
@@ -82,7 +87,7 @@ When you export a bundle, local plugins travel with it automatically:
 - **`.bat` export** — plugin files are packed into a base64-encoded tar and extracted into `plugins/` before `headless_install` runs.
 - **Folder export** — plugin files are copied directly into `<bundle>/plugins/` alongside the deployer clone.
 
-A fully annotated example is available in [`plugins/example_copy_models_from_root.py`](plugins/example_copy_models_from_root.py) (disabled by default).
+Two fully annotated examples are available, both disabled by default: [`plugins/example_copy_models_from_root.py`](plugins/example_copy_models_from_root.py) (a bundle step) and [`plugins/example_ui_actions.py`](plugins/example_ui_actions.py) (custom buttons).
 
 #### Remote plugins (shared via git)
 
@@ -146,6 +151,68 @@ The full API is documented in [`deployer/plugins/api.py`](deployer/plugins/api.p
 | `StepPhase.BOTH` | Both of the above |
 
 > **Important:** always import PyQt6 *lazily* inside `build_widget`. The headless install path imports plugin modules without Qt, and a top-level `import PyQt6` will break it.
+
+#### Custom buttons (UI actions)
+
+A plugin can also add its own buttons to the main window's bottom action row — left of **Update** / **Run Comfy** — or its own entries at the bottom of the `☰` menu. Clicking one runs your code (or your command) against the local install, with everything it prints streamed into the console panel.
+
+The simplest form needs no code at all — a label and a command:
+
+```python
+from deployer.plugins import CommandAction
+
+class OpenOutputFolder(CommandAction):
+    id = "open_output_folder"       # unique, stable
+    label = "Output folder"         # button text
+    description = "Open ComfyUI/output in Explorer."   # tooltip
+    command = "explorer ."          # a str runs through the shell; a list doesn't
+    cwd_key = "output_dir"          # which ActionContext path to run in
+    blocked_when_busy = False       # harmless — stays clickable during an install
+
+def register(registry):
+    registry.register_action(OpenOutputFolder())
+```
+
+For anything more involved, subclass `UiAction` and write `run(ctx)`:
+
+```python
+from deployer.plugins import ActionContext, ActionStyle, UiAction
+
+class UpdateAllNodes(UiAction):
+    id = "update_all_nodes"
+    label = "Git pull all"
+    description = "Run 'git pull' in every custom node."
+    style = ActionStyle.WARNING     # NEUTRAL | PRIMARY | SUCCESS | WARNING | DANGER
+    confirm = "Pull every custom node?"   # omit for no confirmation dialog
+
+    def run(self, ctx: ActionContext) -> None:
+        import os
+        for name in sorted(os.listdir(ctx.custom_nodes_dir)):
+            node = os.path.join(ctx.custom_nodes_dir, name)
+            if os.path.isdir(os.path.join(node, ".git")):
+                ctx.log(f"Updating {name}...")
+                ctx.run_command("git pull", cwd=node)
+        ctx.refresh_nodes()         # re-read the cards when done
+
+def register(registry):
+    registry.register_action(UpdateAllNodes())
+```
+
+Key points:
+
+| Attribute | Meaning |
+|---|---|
+| `location` | `ActionLocation.TOOLBAR` (a button, default) or `ActionLocation.MENU` (a `☰` entry) |
+| `style` | Colour intent for a button — resolved by the theme, never a raw colour |
+| `order` | Sort key among plugin actions |
+| `confirm` | Non-empty ⇒ a Yes/No dialog is shown first |
+| `background` | `True` by default: `run()` executes on a worker thread so the window stays responsive |
+| `blocked_when_busy` | `True` by default: greyed out while the deployer installs, bundles or updates ComfyUI. Set `False` for an action that can't interfere (opening a folder, reading a log) so it stays clickable |
+| `is_available(ctx)` | Return `False` to hide the action entirely (e.g. a missing tool) |
+
+`ctx` is an [`ActionContext`](deployer/plugins/actions.py): every local path (`comfyui_dir`, `custom_nodes_dir`, `models_dir`, `input_dir`, `output_dir`, `portable_dir`, `project_root`, `python_exe`), plus `log()`, `run_command()` and `refresh_nodes()`. The full API is documented in [`deployer/plugins/actions.py`](deployer/plugins/actions.py); a worked example lives in [`plugins/example_ui_actions.py`](plugins/example_ui_actions.py).
+
+> UI actions never need PyQt — and must not import it. They are ignored on the headless install path, so a plugin that defines both a step and a button still installs fine on the recipient's machine.
 
 
 ### Advanced settings

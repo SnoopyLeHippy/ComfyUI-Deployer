@@ -548,6 +548,55 @@ QPushButton:pressed {
 }
 """)
 
+#: Neutral toolbar button — the default look of a plugin-contributed action.
+#: Same metrics as the buttons above so the action row stays aligned, but a
+#: recessed surface so plugin buttons never compete with Update / Run Comfy.
+PLUGIN_ACTION_BUTTON_STYLE = _qss("""
+QPushButton {
+    background-color: %(surface_button)s;
+    color: %(text_heading)s;
+    border: 1px solid %(surface_neutral)s;
+    padding: 10px 16px;
+    font-size: 14px;
+    font-weight: bold;
+    border-radius: 4px;
+}
+QPushButton:hover {
+    background-color: %(surface_disabled)s;
+    color: %(text_primary)s;
+}
+QPushButton:pressed {
+    background-color: %(surface_input)s;
+}
+QPushButton:disabled {
+    background-color: %(surface_input)s;
+    color: %(text_subtle)s;
+    border-color: %(surface_border)s;
+}
+""")
+
+PLUGIN_ACTION_WARNING_BUTTON_STYLE = _qss("""
+QPushButton {
+    background-color: %(amber_surface_border)s;
+    color: %(text_primary)s;
+    border: none;
+    padding: 10px 20px;
+    font-size: 14px;
+    font-weight: bold;
+    border-radius: 4px;
+}
+QPushButton:hover {
+    background-color: %(amber_badge)s;
+}
+QPushButton:pressed {
+    background-color: %(install_action_pressed)s;
+}
+QPushButton:disabled {
+    background-color: %(surface_disabled)s;
+    color: %(text_body)s;
+}
+""")
+
 ADD_NODE_BUTTON_STYLE = _qss("""
 QPushButton {
     background-color: %(green_action_alt)s;

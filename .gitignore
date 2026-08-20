@@ -10,10 +10,11 @@ torch*
 user_settings.json
 
 # Local plugins are private to each machine. Only the folder's documentation
-# and the (disabled) reference example are tracked, so a fresh clone still
+# and the (disabled) reference examples are tracked, so a fresh clone still
 # explains how to write one. Note: ignoring "plugins/*" rather than "plugins/"
 # is what makes the negations below work — git cannot re-include a file whose
 # parent directory is itself excluded.
 plugins/*
 !plugins/README.md
 !plugins/example_copy_models_from_root.py
+!plugins/example_ui_actions.py

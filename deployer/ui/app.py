@@ -50,8 +50,10 @@ from deployer.core.workflow_resolver import (
     extract_types_from_node_dir,
     extract_workflow_node_types,
 )
+from deployer.plugins import load_plugins
 from deployer.settings import UserSettings
 from deployer.ui import theme
+from deployer.ui.plugin_actions import PluginActionBar
 from deployer.ui.controllers.install_planner import InstallPlan, plan_install
 from deployer.ui.controllers.workflow_resolution import (
     known_repos_from_cards,
@@ -330,6 +332,16 @@ class CustomNodeDeployerApp(QMainWindow):
         btn_layout.addWidget(self.install_btn)
         btn_layout.addWidget(self.run_comfy_btn)
         main_layout.addWidget(btn_row)
+        # Plugin-contributed buttons sit left of the stretch, so the core
+        # actions stay anchored to the right where the user expects them.
+        self._plugin_actions = PluginActionBar(
+            self,
+            btn_layout,
+            self.hamburger_menu,
+            run_on_ui=self._ui_call.emit,
+            refresh_nodes=self._refresh_cards,
+            insert_index=0,
+        )
 
         # Redirect stdout/stderr — stderr lines render as errors (red) and
         # everything is tee'd to a persistent log file at the project root so
@@ -369,6 +381,13 @@ class CustomNodeDeployerApp(QMainWindow):
         self._orphan_cards: list[OrphanNodeCard] = []
         self._pending_orphan_promotions: list = []
         self._load_nodes()
+
+        # -- Plugin UI actions ----------------------------------------------
+        # Local plugins are on disk already, so their buttons can be built now;
+        # remote ones are cloned in the background (showEvent) and trigger a
+        # rebuild once synced.
+        load_plugins()
+        self._plugin_actions.rebuild()
 
     def _load_nodes(self):
         nodes = load_custom_nodes()
@@ -507,13 +526,15 @@ class CustomNodeDeployerApp(QMainWindow):
     def _set_busy(self, busy: bool) -> None:
         """Toggle the global "long task in progress" state.
 
-        Disables Update, Run Comfy, and the Create Bundle menu action, and
-        animates the Update button's spinner. Shared by the install pipeline
-        and the bundle pipeline so the two can't be triggered concurrently.
+        Disables Update, Run Comfy and the Create Bundle menu action, animates
+        the Update button's spinner, and greys out the plugin actions that
+        declare ``blocked_when_busy``. Shared by the install pipeline and the
+        bundle pipeline so the two can't be triggered concurrently.
         """
         self.install_btn.set_busy(busy)
         self.install_btn.setDisabled(busy)
         self.run_comfy_btn.setDisabled(busy)
+        self._plugin_actions.set_busy(busy)
         self.action_refresh_nodes.setEnabled(not busy)
         self.action_create_bundle.setEnabled(not busy)
         self.action_repair_packages.setEnabled(not busy)
@@ -758,6 +779,8 @@ class CustomNodeDeployerApp(QMainWindow):
     def _on_manage_plugins(self):
         """Open the Manage Plugins dialog. Registry is reloaded by the dialog on changes."""
         ManagePluginsDialog(self).exec()
+        # Plugins may have been added or removed — reflect that in the buttons.
+        self._plugin_actions.rebuild()
 
     def _on_create_bundle(self):
         """Open the Create Bundle dialog and run bundle creation in a background thread.
@@ -1430,9 +1453,12 @@ class CustomNodeDeployerApp(QMainWindow):
             ).start()
 
     def _do_sync_remote_plugins(self, repos):
-        from deployer.plugins import load_plugins, sync_remote_plugins
+        from deployer.plugins import sync_remote_plugins
         sync_remote_plugins(repos)
         load_plugins(force=True)
+        # A freshly cloned plugin may contribute UI actions — rebuild them on
+        # the UI thread (widgets must never be created from this worker).
+        self._ui_call.emit(self._plugin_actions.rebuild)
 
     def _apply_splitter_ratio(self):
         h = self.body_splitter.height()

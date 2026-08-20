@@ -1,10 +1,12 @@
-"""Discovery and storage of bundle-step plugins.
+"""Discovery and storage of plugins.
 
-A single process-wide :class:`PluginRegistry` holds every registered
-:class:`~deployer.plugins.api.BundleStep`. :func:`load_plugins` discovers
-plugin modules on disk and lets each register its steps via a module-level
+A single process-wide :class:`PluginRegistry` holds everything plugins
+contribute: :class:`~deployer.plugins.api.BundleStep` objects (bundle
+lifecycle) and :class:`~deployer.plugins.actions.UiAction` objects (main-window
+buttons and menu entries). :func:`load_plugins` discovers plugin modules on
+disk and lets each register its contributions via a module-level
 ``register(registry)`` entry point (or, as a fallback, by auto-registering any
-``BundleStep`` subclass the module defines).
+``BundleStep`` / ``UiAction`` subclass the module defines).
 
 Plugins are looked up in three locations, in order:
 
@@ -28,14 +30,21 @@ import traceback
 from typing import Callable
 
 from deployer.config import PROJECT_ROOT
+from deployer.plugins.actions import UiAction
 from deployer.plugins.api import BundleStep
 
 
 class PluginRegistry:
-    """In-memory collection of registered bundle steps, keyed by ``id``."""
+    """In-memory collection of what plugins contribute, keyed by ``id``.
+
+    Two independent collections: **bundle steps** (work inserted into the
+    bundle lifecycle) and **UI actions** (buttons / menu entries added to the
+    main window). A plugin may contribute either or both.
+    """
 
     def __init__(self) -> None:
         self._steps: dict[str, BundleStep] = {}
+        self._actions: dict[str, UiAction] = {}
 
     def register(self, step: BundleStep) -> None:
         """Add *step*. A later registration with the same id replaces it."""
@@ -50,8 +59,27 @@ class PluginRegistry:
         """Return registered steps sorted by display name."""
         return sorted(self._steps.values(), key=lambda s: (s.name or s.id).lower())
 
+    # -- UI actions --------------------------------------------------------
+
+    def register_action(self, action: UiAction) -> None:
+        """Add *action*. A later registration with the same id replaces it."""
+        if not getattr(action, "id", ""):
+            raise ValueError(f"UiAction {action!r} has no 'id'; cannot register.")
+        self._actions[action.id] = action
+
+    def get_action(self, action_id: str) -> UiAction | None:
+        return self._actions.get(action_id)
+
+    def actions(self) -> list[UiAction]:
+        """Return registered UI actions sorted by ``order`` then label."""
+        return sorted(
+            self._actions.values(),
+            key=lambda a: (a.order, (a.label or a.id).lower()),
+        )
+
     def clear(self) -> None:
         self._steps.clear()
+        self._actions.clear()
 
 
 #: Process-wide registry shared by the dialog, builder, and headless install.
@@ -79,10 +107,11 @@ def _import_plugin_file(path: str) -> object | None:
 
 
 def _register_from_module(module: object) -> None:
-    """Let *module* contribute its steps.
+    """Let *module* contribute its steps and UI actions.
 
     Prefers an explicit ``register(registry)`` entry point; otherwise
-    auto-registers any concrete ``BundleStep`` subclass defined in the module.
+    auto-registers any concrete ``BundleStep`` / ``UiAction`` subclass defined
+    in the module (identified by carrying a non-empty ``id``).
     """
     entry = getattr(module, "register", None)
     if callable(entry):
@@ -90,13 +119,12 @@ def _register_from_module(module: object) -> None:
         return
 
     for value in vars(module).values():
-        if (
-            isinstance(value, type)
-            and issubclass(value, BundleStep)
-            and value is not BundleStep
-            and getattr(value, "id", "")
-        ):
+        if not (isinstance(value, type) and getattr(value, "id", "")):
+            continue
+        if issubclass(value, BundleStep) and value is not BundleStep:
             registry.register(value())
+        elif issubclass(value, UiAction) and value is not UiAction:
+            registry.register_action(value())
 
 
 def _discover_dir(directory: str) -> None:
