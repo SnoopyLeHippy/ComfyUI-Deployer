@@ -7,7 +7,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import QFileDialog, QLabel, QLineEdit, QMenu, QMessageBox, QVBoxLayout
 
-from deployer.core.junctions import replace_with_junction
+from deployer.core.junctions import read_junction_target, replace_with_junction
 from deployer.core.node import CustomNode
 from deployer.ui import theme
 from deployer.ui.widgets.base_card import BaseCard
@@ -25,6 +25,7 @@ class NodeCard(BaseCard):
         on_ref_saved=None,
         on_remove=None,
         on_selection_changed=None,
+        on_refresh_requested=None,
         parent=None,
     ):
         self.node = node
@@ -32,6 +33,7 @@ class NodeCard(BaseCard):
         self.is_needs_update = False
         self._on_ref_saved = on_ref_saved
         self._on_remove = on_remove
+        self._on_refresh_requested = on_refresh_requested
 
         super().__init__(node.name, on_selection_changed=on_selection_changed, parent=parent)
 
@@ -233,17 +235,36 @@ class NodeCard(BaseCard):
         open_repo_action = QAction("Open repository...", self)
         junction_action = QAction("Replace by junction...", self)
         junction_action.setEnabled(self.node.is_installed)
+        open_explorer_action = QAction("Open in Explorer...", self)
+        open_explorer_action.setEnabled(self.node.is_installed)
+        refresh_action = QAction("Refresh", self)
+        refresh_action.setEnabled(self.node.is_installed)
         remove_action = QAction("Remove from config", self)
         menu.addAction(open_repo_action)
         menu.addAction(junction_action)
+        menu.addAction(open_explorer_action)
+        menu.addSeparator()
+        menu.addAction(refresh_action)
+        menu.addSeparator()
         menu.addAction(remove_action)
         action = menu.exec(self.mapToGlobal(pos))
         if action == open_repo_action:
             webbrowser.open(self.node.web_url)
         elif action == junction_action:
             self._replace_by_junction()
+        elif action == open_explorer_action:
+            self._open_in_explorer()
+        elif action == refresh_action:
+            if self._on_refresh_requested:
+                self._on_refresh_requested(self)
         elif action == remove_action and self._on_remove:
             self._on_remove(self)
+
+    def _open_in_explorer(self) -> None:
+        """Open the node's folder — the junction's real target when it is one."""
+        path = read_junction_target(self.node.comfyui_path) or self.node.comfyui_path
+        if os.path.isdir(path):
+            os.startfile(path)
 
     def _replace_by_junction(self) -> None:
         """Delete the node's folder in custom_nodes and re-link it via a junction

@@ -8,6 +8,7 @@ import shutil
 import sys
 import threading
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 
 from PyQt6.QtCore import QEvent, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QColor, QPainter
@@ -384,6 +385,7 @@ class CustomNodeDeployerApp(QMainWindow):
                 on_ref_saved=self._save_user_settings,
                 on_remove=self._on_remove_card,
                 on_selection_changed=self._refresh_install_btn,
+                on_refresh_requested=self._refresh_card,
             )
             self.card_grid.add_card(card)
             self._node_cards.append(card)
@@ -425,39 +427,77 @@ class CustomNodeDeployerApp(QMainWindow):
         if from_workflow:
             self._refresh_install_btn()
 
+    _UPDATE_CHECK_WORKERS = 8  # concurrent git subprocesses for the checks below
+
     def _check_refs(self):
-        """Background thread: mark installed nodes whose ref has drifted as pending update."""
-        for card in list(self._node_cards):
-            if not card.node.is_installed:
-                continue
-            is_current = card.node.is_ref_current()
-            def _mark(c=card, is_current=is_current):
-                if not is_current:
-                    c.is_pending_update = True
-                c.check_done()
-                c.refresh()
-                self._refresh_install_btn()
-            self._ui_call.emit(_mark)
+        """Background thread: mark installed nodes whose ref has drifted as pending update.
+
+        Runs one ``is_ref_current()`` per installed node on a small thread pool
+        so the (local, per-repo) git calls overlap instead of running one at a
+        time.
+        """
+        cards = [c for c in self._node_cards if c.node.is_installed]
+
+        def _check(card):
+            return card, card.node.is_ref_current()
+
+        def _mark(c, is_current):
+            if not is_current:
+                c.is_pending_update = True
+            c.check_done()
+            c.refresh()
+            self._refresh_install_btn()
+
+        with ThreadPoolExecutor(max_workers=self._UPDATE_CHECK_WORKERS) as pool:
+            for card, is_current in pool.map(_check, cards):
+                self._ui_call.emit(lambda c=card, is_current=is_current: _mark(c, is_current))
 
     def _check_node_updates(self):
         """Background thread: fetch each installed node and flag those whose
         branch is behind its remote as 'Need update'.
 
-        Touches the network (one ``git fetch`` per node), so it runs separately
-        from the fast, local-only ``_check_refs`` pass. A node already armed for
-        a ref-change "To update" is left as-is — that drift takes priority.
+        Touches the network (one ``git fetch`` per node), so it runs on a
+        thread pool to overlap the network round-trips instead of doing them
+        one at a time, and separately from the fast, local-only ``_check_refs``
+        pass. A node already armed for a ref-change "To update" is left as-is
+        — that drift takes priority.
         """
-        for card in list(self._node_cards):
-            node = card.node
-            if not node.is_installed:
-                continue
-            is_behind = node.is_behind_remote()
-            def _mark(c=card, is_behind=is_behind):
-                if is_behind and not c.is_pending_update and not c.is_selected:
-                    c.is_needs_update = True
-                c.check_done()
-                c.refresh()
-            self._ui_call.emit(_mark)
+        cards = [c for c in self._node_cards if c.node.is_installed]
+
+        def _check(card):
+            return card, card.node.is_behind_remote()
+
+        def _mark(c, is_behind):
+            if is_behind and not c.is_pending_update and not c.is_selected:
+                c.is_needs_update = True
+            c.check_done()
+            c.refresh()
+
+        with ThreadPoolExecutor(max_workers=self._UPDATE_CHECK_WORKERS) as pool:
+            for card, is_behind in pool.map(_check, cards):
+                self._ui_call.emit(lambda c=card, is_behind=is_behind: _mark(c, is_behind))
+
+    def _refresh_card(self, card) -> None:
+        """Right-click 'Refresh': re-run the ref/remote checks for one card."""
+        if not card.node.is_installed:
+            return
+        card.begin_checking(1)
+        card.refresh()
+        threading.Thread(target=self._refresh_card_worker, args=(card,), daemon=True).start()
+
+    def _refresh_card_worker(self, card):
+        node = card.node
+        is_current = node.is_ref_current()
+        is_behind = node.is_behind_remote()
+
+        def _mark(c=card, is_current=is_current, is_behind=is_behind):
+            c.is_pending_update = not is_current
+            c.is_needs_update = is_behind and not c.is_pending_update and not c.is_selected
+            c.check_done()
+            c.refresh()
+            self._refresh_install_btn()
+
+        self._ui_call.emit(_mark)
 
     def eventFilter(self, obj, event):
         if obj is self.scroll_area.viewport() and event.type() == QEvent.Type.Resize:
@@ -558,6 +598,7 @@ class CustomNodeDeployerApp(QMainWindow):
                     on_ref_saved=self._save_user_settings,
                     on_remove=self._on_remove_card,
                     on_selection_changed=self._refresh_install_btn,
+                    on_refresh_requested=self._refresh_card,
                 )
                 self.card_grid.add_card(card)
                 self._node_cards.append(card)
@@ -1080,6 +1121,7 @@ class CustomNodeDeployerApp(QMainWindow):
             on_ref_saved=self._save_user_settings,
             on_remove=self._on_remove_card,
             on_selection_changed=self._refresh_install_btn,
+            on_refresh_requested=self._refresh_card,
         )
         card.is_selected = True
         card.req_checkbox.blockSignals(True)
@@ -1104,6 +1146,7 @@ class CustomNodeDeployerApp(QMainWindow):
             on_ref_saved=self._save_user_settings,
             on_remove=self._on_remove_card,
             on_selection_changed=self._refresh_install_btn,
+            on_refresh_requested=self._refresh_card,
         )
         if node.is_installed and ref != orphan.ref:
             card.is_pending_update = True
@@ -1329,6 +1372,7 @@ class CustomNodeDeployerApp(QMainWindow):
             on_ref_saved=self._save_user_settings,
             on_remove=self._on_remove_card,
             on_selection_changed=self._refresh_install_btn,
+            on_refresh_requested=self._refresh_card,
         )
         # Pre-select it as 'To install'
         card.is_selected = True
