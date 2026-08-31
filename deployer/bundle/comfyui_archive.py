@@ -9,7 +9,15 @@ from deployer.core.http import download_file
 
 
 _ARCHIVE_NAME = "ComfyUI_windows_portable_nvidia.7z"
-_RELEASE_URL_FMT = "https://github.com/Comfy-Org/ComfyUI/releases/download/v{version}/" + _ARCHIVE_NAME
+
+# Temporary: the per-version asset URL
+# (github.com/Comfy-Org/ComfyUI/releases/download/v<version>/...) does not
+# resolve for every release, so both bundle formats download the "latest"
+# portable asset instead of the version installed locally. Restore the pin once
+# a reliable per-version URL is found.
+ARCHIVE_URL = (
+    "https://github.com/comfyanonymous/ComfyUI/releases/latest/download/" + _ARCHIVE_NAME
+)
 
 _SEVENZIP_FALLBACK_PATHS = (
     r"C:\Program Files\7-Zip\7z.exe",
@@ -44,15 +52,14 @@ def get_comfyui_version() -> str:
     return "latest"
 
 
-def download_and_extract_comfyui(dest_dir: str, version: str) -> None:
-    """Download the ComfyUI portable archive for *version* and extract to *dest_dir*."""
+def download_and_extract_comfyui(dest_dir: str) -> None:
+    """Download the latest ComfyUI portable archive and extract to *dest_dir*."""
     archive_path = os.path.join(dest_dir, _ARCHIVE_NAME)
-    url = _RELEASE_URL_FMT.format(version=version)
 
-    print(f"Downloading ComfyUI v{version}...")
+    print(f"Downloading the latest ComfyUI portable (local install: v{get_comfyui_version()})...")
     # GitHub release archives are several gigabytes — give the download a
     # generous ceiling so a slow link doesn't time out mid-transfer.
-    download_file(url, archive_path, timeout=3600)
+    download_file(ARCHIVE_URL, archive_path, timeout=3600)
 
     print("Extracting archive...")
     seven_zip = _find_7z()

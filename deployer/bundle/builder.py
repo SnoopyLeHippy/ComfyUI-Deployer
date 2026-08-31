@@ -5,7 +5,6 @@ import shutil
 
 from deployer.bundle.comfyui_archive import (
     download_and_extract_comfyui,
-    get_comfyui_version,
 )
 from deployer.bundle.model_copier import copy_models_for_bundle
 from deployer.bundle.node_cloner import (
@@ -153,8 +152,7 @@ def create_bundle(
             _clone_remote_plugins(dest_dir, plugin_repos)
 
     # --- Step 1: Download and extract a clean ComfyUI ---
-    version = get_comfyui_version()
-    download_and_extract_comfyui(dest_dir, version)
+    download_and_extract_comfyui(dest_dir)
 
     dst_portable = os.path.join(dest_dir, "ComfyUI_windows_portable")
     dst_comfyui = os.path.join(dst_portable, "ComfyUI")

@@ -24,7 +24,7 @@ import os
 import re
 import tarfile
 
-from deployer.bundle.comfyui_archive import get_comfyui_version
+from deployer.bundle.comfyui_archive import ARCHIVE_URL
 from deployer.bundle.workflow_parser import (
     extract_workflow_info,
     find_custom_node_dirs_for_types,
@@ -44,23 +44,8 @@ BAT_FILENAME = "install_comfyui_bundle.bat"
 _LOCAL_PLUGINS_DIR = os.path.join(PROJECT_ROOT, "plugins")
 _REMOTE_PLUGINS_DIR = os.path.join(_LOCAL_PLUGINS_DIR, "remote")
 
-# Comfy-Org ships a versioned portable archive per release; fall back to the
-# upstream "latest" asset when we can't read a concrete version on disk.
-_PINNED_URL_FMT = (
-    "https://github.com/Comfy-Org/ComfyUI/releases/download/v{version}/"
-    "ComfyUI_windows_portable_nvidia.7z"
-)
-_LATEST_URL = (
-    "https://github.com/comfyanonymous/ComfyUI/releases/latest/download/"
-    "ComfyUI_windows_portable_nvidia.7z"
-)
-
 # echo chunk size for embedded base64 — comfortably under cmd's line limit.
 _CHUNK = 4000
-
-
-def _archive_url(version: str) -> str:
-    return _LATEST_URL if version == "latest" else _PINNED_URL_FMT.format(version=version)
 
 
 def _build_node_list(
@@ -514,7 +499,7 @@ def create_sharable_bat(
     content = _render_bat(
         deployer_repo=repo_url,
         deployer_branch=branch,
-        archive_url=_archive_url(get_comfyui_version()),
+        archive_url=ARCHIVE_URL,
         settings_b64=settings_b64,
         extra_yaml_b64=extra_yaml_b64,
         workflows_b64=workflows_b64,

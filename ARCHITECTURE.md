@@ -124,6 +124,12 @@ a script that reproduces all of the above on the recipient's machine via
 
 **Models are never embedded in a `.bat`** — deliberate, they're far too heavy.
 
+Both formats download the **latest** ComfyUI portable release
+(`comfyui_archive.ARCHIVE_URL`, the single source of truth for that URL), not the
+version installed locally: the per-version asset URL didn't resolve for every
+release. `get_comfyui_version()` is now informational only (printed while
+downloading).
+
 ### Workflow resolution (core/workflow_resolver.py)
 Extracts a workflow's `node.type` values, drops the built-ins (scan of `nodes.py`
 / `comfy_extras`) and the already-installed nodes, then queries the
