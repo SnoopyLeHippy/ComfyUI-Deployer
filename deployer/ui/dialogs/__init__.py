@@ -9,7 +9,10 @@ from deployer.ui.dialogs.advanced_settings import (  # noqa: F401
 )
 from deployer.ui.dialogs.create_bundle import CreateBundleDialog  # noqa: F401
 from deployer.ui.dialogs.install_package import InstallPackageDialog  # noqa: F401
-from deployer.ui.dialogs.missing_nodes import MissingNodesDialog  # noqa: F401
+from deployer.ui.dialogs.extra_nodes import (  # noqa: F401
+    ExtraNodesDecision,
+    ExtraNodesDialog,
+)
 from deployer.ui.dialogs.package_repair import PackageRepairDialog  # noqa: F401
 from deployer.ui.dialogs.path_picker import PathPickerRow  # noqa: F401
 from deployer.ui.dialogs.workflow_conflict import WorkflowConflictDialog  # noqa: F401

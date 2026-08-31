@@ -693,8 +693,24 @@ CLEAR_BUTTON_NO_DISABLED_STYLE = _qss(
     "QPushButton:hover { background: %(stop_action)s; color: %(text_primary)s; }"
 )
 
-MISSING_NODES_LIST_STYLE = _qss(
-    "QListWidget { background-color: %(surface_panel)s; border: 1px solid %(surface_border)s; "
-    "border-radius: 4px; padding: 4px; } "
-    "QListWidget::item { color: %(text_heading)s; padding: 3px 6px; }"
-)
+DANGER_BUTTON_STYLE = _qss("""
+QPushButton {
+    background-color: %(stop_action)s;
+    color: %(text_primary)s;
+    border: none;
+    padding: 8px 16px;
+    font-size: 14px;
+    font-weight: bold;
+    border-radius: 4px;
+}
+QPushButton:hover {
+    background-color: %(stop_action_hover)s;
+}
+QPushButton:pressed {
+    background-color: %(stop_action_pressed)s;
+}
+QPushButton:disabled {
+    background-color: %(surface_disabled)s;
+    color: %(text_body)s;
+}
+""")

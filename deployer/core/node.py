@@ -39,6 +39,30 @@ def _repo_relative_path(repo: str) -> str:
     return _strip_git_suffix(os.path.basename(repo))
 
 
+def repo_identity(repo: str) -> str:
+    """Host + path key identifying a repository across its spellings.
+
+    ``git@gitlab.example.com:grp/Node.git`` and
+    ``https://gitlab.example.com/grp/Node`` are one repository; comparing the
+    raw strings would not say so, and that matters here because
+    :attr:`CustomNode.clone_url` deliberately clones GitLab remotes over SSH
+    while the configuration usually stores them as HTTPS. Case, ``.git`` and
+    trailing slashes are normalised away too.
+    """
+    return f"{_repo_host(repo)}/{_repo_relative_path(repo)}".strip("/").lower()
+
+
+def repo_folder_name(repo: str) -> str:
+    """The ``custom_nodes/`` directory *repo* clones into.
+
+    This is a node's real primary key: two repo URLs yielding the same folder
+    name cannot coexist on disk, whatever their remotes are. Public because
+    config merging needs it without building a :class:`CustomNode` (whose
+    constructor hits the filesystem).
+    """
+    return os.path.basename(_repo_relative_path(repo)) or os.path.basename(repo.rstrip("/\\"))
+
+
 def _repo_looks_like_gitlab(repo: str) -> bool:
     if GITLAB_URL and repo.startswith(GITLAB_URL):
         return True
@@ -68,7 +92,7 @@ class CustomNode:
         self.description = description
         self._git_path = _repo_relative_path(repo)
         self._is_gitlab_repo = _repo_looks_like_gitlab(repo)
-        self.name = os.path.basename(self._git_path) or os.path.basename(repo.rstrip("/\\"))
+        self.name = repo_folder_name(repo)
         self.is_selected = False
         self.is_install_requirements = False
 

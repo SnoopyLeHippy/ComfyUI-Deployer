@@ -43,7 +43,7 @@ deployer/
     git_ops.py                   Subprocess wrappers around `git`
     command_runner.py            stream_command() — run a process, stream its output line by line
     installer.py                 Orchestrates node install + requirements
-    orphans.py                   Detects untracked custom_nodes directories
+    orphans.py                   Detects untracked custom_nodes dirs (URL + folder name)
     workflow_io.py               Extracts the workflow graph (JSON or PNG/WebP/JPEG image)
     workflow_resolver.py         Resolves missing node types → repos (ComfyUI-Manager DB)
     package_repair.py            5 diagnostic passes + pip package repair
@@ -72,7 +72,8 @@ deployer/
   ui/
     app.py                       Main window — the central hub
     plugin_actions.py            PluginActionBar — renders plugin UiActions as buttons / menu entries
-    controllers/                 Testable logic extracted from app.py (install_planner, workflow_resolution)
+    controllers/                 Testable logic extracted from app.py
+                                 (install_planner, workflow_resolution, config_merge)
     dialogs/                     Modal windows
     widgets/                     Cards, grid, busy button, spinner, console
     theme/                       Centralised palette + Qt stylesheets
@@ -87,6 +88,27 @@ is a GitLab one (via `.env`: `GITLAB_URL`/`GITLAB_SSH`) to pick HTTPS vs SSH whe
 cloning. `is_installed` is computed at construction time **from disk**, not from
 the settings.
 
+Two module-level helpers give the rest of the code the same identity rules
+without building a node (the constructor touches the filesystem):
+
+* `repo_identity(repo)` — `host/path`, lowercased, `.git` and trailing slashes
+  stripped. Says whether two URLs denote **the same repository** across their
+  spellings, notably `git@host:grp/N.git` vs `https://host/grp/N`. This matters
+  because `clone_url` deliberately clones GitLab remotes over SSH while
+  `user_settings.json` stores them as HTTPS: comparing raw strings used to
+  report every GitLab node as an orphan.
+* `repo_folder_name(repo)` — the `custom_nodes/` directory the repo clones into.
+  The node's real **primary key**: two URLs producing the same folder name
+  cannot coexist on disk, whatever their remotes are.
+
+Both are the comparison basis for orphan discovery (`core/orphans.py`) and for
+config merging (`ui/controllers/config_merge.py`), and **both** passes are
+needed in each. `discover_orphan_nodes(known_identities, known_folder_names)`
+skips a directory matching either: a repo renamed upstream (`owner/Node` to
+`owner/ComfyUI-Node`) leaves the old URL in the clone's `origin` while the
+configuration carries the new one, so identity alone reports that node twice —
+once *Installed*, once *Missing*.
+
 ### `user_settings.json` (settings.py)
 Schema:
 `{"nodes": [...], "settings": {...}, "steps": [...], "plugins": {"remote": [...]}}`.
@@ -97,7 +119,7 @@ created on first launch from `custom_nodes.json` (static fallback) or from the
 legacy GitLab manifest (`SOURCE_NODES_JSON`, see *Legacy*).
 
 ### Card states (ui/widgets/card_state.py)
-`CardState` is a **9-value** enum, each mapped to
+`CardState` is a **10-value** enum, each mapped to
 `(stylesheet, badge_text, badge_stylesheet)` in a table — this avoids the
 cascades of `if is_selected and is_installed: ...` in every widget. `NodeCard`
 and `OrphanNodeCard` share everything through `BaseCard` and only diverge on
@@ -109,6 +131,46 @@ into concrete actions (`to_install`, `to_uninstall`, `to_update`,
 `with_requirements`, `selected_orphans`). Executed in this **specific order** by
 `app.py._execute_plan`: uninstall → ref update → install → orphan promotion.
 Extracted from `app.py` so it stays testable without Qt.
+
+A card flagged `is_pending_reinstall` (state `TO_REINSTALL`, badge
+"To re-clone") lands in **both** `to_uninstall` and `to_install` with the same
+node object: its remote changed under an unchanged folder name, so `git pull`
+would fetch the *old* origin. The uninstall-before-install order is what makes
+that pair work — `node.clone()` is a no-op when the directory still exists.
+
+### Config merge (ui/controllers/config_merge.py)
+`merge_config(loaded_entries, existing) -> ConfigMergePlan` decides what
+"Load Configuration..." does to the grid. Loading **replaces** the grid, it
+never adds to it. Each loaded entry is matched against the current cards in two
+passes, most specific first: by `repo_identity`, then by `repo_folder_name`.
+A name match with a different identity means the remote itself changed.
+
+| loaded entry vs. the grid                    | `MergeAction` | card state    |
+|----------------------------------------------|---------------|---------------|
+| same repo, same ref, on disk                 | `KEEP`        | Installed     |
+| same repo, other ref, on disk                | `UPDATE`      | To update     |
+| same folder name, **other remote**, on disk  | `REINSTALL`   | To re-clone   |
+| not on disk (unknown, or tracked but absent) | `INSTALL`     | To install    |
+
+Orphan cards take part in the matching (a match promotes them to tracked
+cards), tracked cards win over orphans on a key collision, and orphans are
+never reported as "extras" — they were never in the configuration. Duplicate
+entries inside the loaded file itself are dropped with a console warning.
+
+The controller is pure: it holds each card as an opaque `handle` on an
+`ExistingCard` and never touches Qt, so the whole classification is unit
+testable. `app.py` applies the plan — `_card_for_entry` (create / promote /
+rewrite) then `_arm_card` (set the flags, re-checking the action against what
+is actually on disk).
+
+Tracked nodes the configuration doesn't mention go to `ExtraNodesDialog`, which
+offers three answers because "delete" is ambiguous here: **uninstall** (mark
+"To remove"; the next Install wipes the folder, and `_refresh_cards` then drops
+the card from the configuration — guarded on the folder actually being gone, so
+a failed or deselected removal keeps its card), **untrack** (drop from the
+configuration only — the node stays on disk and comes back as a *Missing*
+orphan card, so the choice is reversible), or **keep**. Nothing destructive
+runs during the load itself.
 
 ### Bundle pipeline (bundle/builder.py → create_bundle)
 Sequential steps: clone the Deployer (if requested) → download/extract a clean
@@ -238,8 +300,8 @@ the referenced model files.
 - **Decide the fate of the legacy GitLab mode** (keep/document/remove).
 - **Unit tests** for `core/` and `ui/controllers/`: they are already written
   without a Qt dependency, so they're testable as-is (`plan_install`,
-  `resolve_workflows`, `workflow_resolver`, `node.py`). The project currently has
-  no tests at all.
+  `merge_config`, `resolve_workflows`, `workflow_resolver`, `node.py`). The
+  project currently has no tests at all.
 - **`deployer/plugins/builtin/` is still empty.** Now that a plugin can also
   contribute buttons, a couple of obviously-useful ones (open the ComfyUI
   folder, open the log) would be candidates — at the cost of the "no
@@ -250,10 +312,11 @@ the referenced model files.
   `bundle/headless_install.py` and `core/orphans.py` (as the `_canonical_url`
   variant). `deployer.plugins.repo_dir_name` does exactly this and is now public —
   those call sites could use it.
-- **`ui/app.py` is ~1,490 lines** and concentrates a lot of responsibilities (grid,
-  threads, workflow resolution, bundling, config I/O). Both controllers have
+- **`ui/app.py` is ~1,565 lines** and concentrates a lot of responsibilities (grid,
+  threads, workflow resolution, bundling, config I/O). Three controllers have
   already been extracted; the move could continue if the file becomes painful to
-  evolve.
+  evolve — the load-config helpers (`_card_for_entry`, `_arm_card`,
+  `_resolve_extra_cards`) are the next obvious cluster.
 - Implement `extra_model_paths.yaml` resolution during bundle creation.
 
 ## Audit history

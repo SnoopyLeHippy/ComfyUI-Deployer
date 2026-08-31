@@ -44,7 +44,7 @@ from deployer.core.installer import (
 from deployer.core.package_repair import BrokenPackage, reinstall_packages
 from deployer.core.pip_runner import install_packages
 from deployer.core.junctions import is_junction
-from deployer.core.node import CustomNode
+from deployer.core.node import CustomNode, repo_folder_name, repo_identity
 from deployer.core.orphans import discover_orphan_nodes
 from deployer.core.workflow_resolver import (
     extract_types_from_node_dir,
@@ -54,6 +54,11 @@ from deployer.plugins import load_plugins
 from deployer.settings import UserSettings
 from deployer.ui import theme
 from deployer.ui.plugin_actions import PluginActionBar
+from deployer.ui.controllers.config_merge import (
+    ExistingCard,
+    MergeAction,
+    merge_config,
+)
 from deployer.ui.controllers.install_planner import InstallPlan, plan_install
 from deployer.ui.controllers.workflow_resolution import (
     known_repos_from_cards,
@@ -63,9 +68,10 @@ from deployer.ui.dialogs import (
     AddNodeDialog,
     AdvancedSettingsDialog,
     CreateBundleDialog,
+    ExtraNodesDecision,
+    ExtraNodesDialog,
     InstallPackageDialog,
     ManagePluginsDialog,
-    MissingNodesDialog,
     PackageRepairDialog,
     WorkflowConflictDialog,
     apply_advanced_settings,
@@ -380,6 +386,7 @@ class CustomNodeDeployerApp(QMainWindow):
         self._node_cards: list[NodeCard] = []
         self._orphan_cards: list[OrphanNodeCard] = []
         self._pending_orphan_promotions: list = []
+        self._pending_config_removals: list = []
         self._load_nodes()
 
         # -- Plugin UI actions ----------------------------------------------
@@ -394,7 +401,7 @@ class CustomNodeDeployerApp(QMainWindow):
         seen: dict[str, CustomNode] = {}
         dropped: list[str] = []
         for node in nodes:
-            key = self._canonical_repo(node.repo)
+            key = repo_identity(node.repo)
             if key in seen:
                 dropped.append(node.repo)
                 continue
@@ -429,8 +436,12 @@ class CustomNodeDeployerApp(QMainWindow):
 
     def _discover_orphans(self):
         """Background thread: find nodes installed in ComfyUI but not in user_settings."""
-        known_urls = {self._canonical_repo(card.node.repo) for card in self._node_cards}
-        orphans = discover_orphan_nodes(known_urls)
+        known_urls = {repo_identity(card.node.repo) for card in self._node_cards}
+        # Folder names too: an upstream rename leaves the old URL in the
+        # clone's origin, and the node would otherwise show up both as an
+        # 'Installed' card and as a 'Missing' orphan.
+        known_names = {repo_folder_name(card.node.repo) for card in self._node_cards}
+        orphans = discover_orphan_nodes(known_urls, known_names)
         for name, repo, ref in orphans:
             self._orphan_found.emit(name, repo, ref, "", False)
 
@@ -608,6 +619,22 @@ class CustomNodeDeployerApp(QMainWindow):
 
     def _refresh_cards(self):
         """Resync each card's state from disk and redraw."""
+        # Drop the cards a load-config asked to uninstall, now that the install
+        # pass has run. Guarded on the folder actually being gone: a failed
+        # uninstall — or one the user deselected before hitting Install — keeps
+        # its card so the removal can be retried.
+        if self._pending_config_removals:
+            for card in self._pending_config_removals:
+                if card not in self._node_cards:
+                    continue
+                if os.path.exists(card.node.comfyui_path):
+                    continue
+                self.card_grid.remove_card(card)
+                self._node_cards.remove(card)
+                print(f"{card.node.name} removed from the configuration.")
+            self._pending_config_removals = []
+            self._save_user_settings()
+
         # Promote any orphan cards that were just added to settings
         if self._pending_orphan_promotions:
             for orphan_card, node in self._pending_orphan_promotions:
@@ -641,6 +668,7 @@ class CustomNodeDeployerApp(QMainWindow):
             # here would wipe the status of untouched cards still behind
             # their remote.
             card.is_pending_update = False
+            card.is_pending_reinstall = False
             if card.node.is_installed != was_installed:
                 card.is_needs_update = False
             card.is_from_workflow = False
@@ -985,11 +1013,6 @@ class CustomNodeDeployerApp(QMainWindow):
         box.setStyleSheet(theme.APP_STYLE)
         return box.exec() == QMessageBox.StandardButton.Yes
 
-    @staticmethod
-    def _canonical_repo(url: str) -> str:
-        """Tolerant key for comparing repo URLs across case / trailing slash / .git."""
-        return url.strip().rstrip("/").removesuffix(".git").lower()
-
     def _on_export_config(self):
         """Open a Save dialog and write the current configuration to a JSON file."""
         path, _ = QFileDialog.getSaveFileName(
@@ -1026,18 +1049,27 @@ class CustomNodeDeployerApp(QMainWindow):
         )
 
     def _on_load_config(self):
-        """Open a file dialog and load node configuration from a JSON file.
+        """Open a file dialog and load a node configuration from a JSON file.
 
-        Classification per loaded entry (matched against existing cards by
-        canonical repo URL):
+        Loading **replaces** the grid, it never adds to it. Each loaded entry is
+        matched against the current cards by repo identity, then by folder name
+        (see :mod:`deployer.ui.controllers.config_merge`), and the matched card
+        is rewritten with the incoming repo / ref / description:
 
-        * Existing + installed + ref changed → marked "To update".
-        * Existing + not installed → marked "To install" with requirements on.
-        * Not present locally → a new "To install" card is created.
+        * installed at the same ref → left alone;
+        * installed at another ref → "To update";
+        * installed from another remote under the same folder name →
+          "To re-clone" (uninstall + clone, since ``git pull`` would fetch the
+          old origin);
+        * absent from disk → "To install", requirements on.
 
-        Locally tracked nodes absent from the loaded config are marked for
-        removal (the existing behaviour), and surfaced via
-        :class:`MissingNodesDialog`.
+        Nodes already on disk but untracked (orphan cards) are promoted the
+        same way, so a load never leaves both an orphan and a fresh card for
+        one node.
+
+        Tracked nodes the configuration doesn't mention go to
+        :class:`ExtraNodesDialog`, which asks whether to uninstall them, only
+        untrack them, or keep them.
 
         If the loaded JSON has a ``settings`` subdict, the user is prompted
         about importing it via :func:`apply_advanced_settings`.
@@ -1054,73 +1086,38 @@ class CustomNodeDeployerApp(QMainWindow):
         with open(path, "r", encoding="utf-8") as fh:
             config = json.load(fh)
 
-        loaded_entries = config.get("nodes", [])
-        existing_by_repo = {self._canonical_repo(c.node.repo): c for c in self._node_cards}
-        existing_orphan_by_repo = {self._canonical_repo(c.repo): c for c in self._orphan_cards}
-        loaded_keys: set[str] = set()
+        plan = merge_config(
+            config.get("nodes", []),
+            [
+                ExistingCard(card, card.node.repo, card.node.ref, card.node.is_installed)
+                for card in self._node_cards
+            ]
+            + [
+                ExistingCard(card, card.repo, card.ref, True, is_orphan=True)
+                for card in self._orphan_cards
+            ],
+        )
 
-        update_count = 0
-        install_count = 0
+        for repo in plan.dropped_duplicates:
+            print(f"Warning: duplicate entry in the loaded configuration ignored: {repo}")
 
-        for entry in loaded_entries:
-            repo = entry.get("repo")
-            if not repo:
-                continue
-            key = self._canonical_repo(repo)
-            loaded_keys.add(key)
-            new_ref = entry.get("ref", "main")
-            new_desc = entry.get("description", "")
+        applied: dict[MergeAction, int] = {action: 0 for action in MergeAction}
+        for entry in plan.entries:
+            action = self._arm_card(self._card_for_entry(entry), entry.action)
+            applied[action] += 1
 
-            card = existing_by_repo.get(key)
-            if card is None:
-                orphan = existing_orphan_by_repo.get(key)
-                if orphan is not None:
-                    # Already on disk as an orphan → promote to a tracked card
-                    # so we don't end up with both an orphan and a new card for
-                    # the same repo.
-                    if new_ref != orphan.ref:
-                        update_count += 1
-                    self._promote_orphan_from_load(orphan, repo, new_ref, new_desc)
-                    continue
-                # Not tracked locally → create a fresh "To install" card.
-                self._add_imported_node(repo, new_ref, new_desc)
-                install_count += 1
-                continue
-
-            # Existing card: refresh metadata, then decide install vs update.
-            if card.node.is_installed:
-                if new_ref != card.node.ref:
-                    card.is_pending_update = True
-                    update_count += 1
-            else:
-                # Tracked but not on disk → arm it for install.
-                card.is_selected = True
-                card.node.is_selected = True
-                card.node.is_install_requirements = True
-                card.req_checkbox.blockSignals(True)
-                card.req_checkbox.setChecked(True)
-                card.req_checkbox.blockSignals(False)
-                install_count += 1
-            card.node.ref = new_ref
-            card.node.description = new_desc
-            card.refresh()
-
-        # Cards present locally but absent from the loaded config → "To remove".
-        extra_cards = [c for c in self._node_cards if self._canonical_repo(c.node.repo) not in loaded_keys]
-        for card in extra_cards:
-            card.is_selected = True
-            card.node.is_selected = True
-            card.refresh()
-        if extra_cards:
-            MissingNodesDialog([c.node.name for c in extra_cards], self).exec()
+        marked, dropped = self._resolve_extra_cards(plan.extras)
 
         self._save_user_settings()
         self._refresh_install_btn()
 
         print(
-            f"Configuration loaded from {path} "
-            f"({update_count} to update, {install_count} to install, "
-            f"{len(extra_cards)} marked to remove)."
+            f"Configuration loaded from {path}: "
+            f"{applied[MergeAction.INSTALL]} to install, "
+            f"{applied[MergeAction.UPDATE]} to update, "
+            f"{applied[MergeAction.REINSTALL]} to re-clone, "
+            f"{applied[MergeAction.KEEP]} already up to date; "
+            f"{marked} marked to remove, {dropped} dropped from the configuration."
         )
 
         # Offer to apply imported advanced settings, if any.
@@ -1134,11 +1131,129 @@ class CustomNodeDeployerApp(QMainWindow):
             UserSettings.save_settings(loaded_settings)
             print("Advanced settings imported.")
 
-    def _add_imported_node(self, repo: str, ref: str, description: str) -> None:
-        """Create a new NodeCard pre-armed for install. Used by load-config."""
+    # -- load-config helpers ------------------------------------------------
+
+    def _card_for_entry(self, entry) -> NodeCard:
+        """Return the card that must carry *entry*, creating or rewriting it.
+
+        Whatever the match was, the card ends up holding the **incoming** repo,
+        ref and description — that is what makes a load a replacement rather
+        than an addition. Arming it is :meth:`_arm_card`'s job.
+        """
+        existing = entry.existing
+        if existing is None:
+            return self._add_imported_node(entry.repo, entry.ref, entry.description)
+        if existing.is_orphan:
+            return self._promote_orphan_from_load(existing.handle, entry)
+
+        card = existing.handle
+        if entry.repo != card.node.repo:
+            # ``repo`` feeds attributes CustomNode caches at construction
+            # (name, local_path, is_gitlab_repo), so the node has to be rebuilt
+            # rather than mutated. The card itself keeps its slot in the grid.
+            card.set_node(CustomNode(entry.repo, entry.ref, entry.description))
+        else:
+            card.node.ref = entry.ref
+            card.node.description = entry.description
+        return card
+
+    @staticmethod
+    def _reset_card(card) -> None:
+        """Clear every pending marker on *card*, leaving disk truth alone."""
+        card.is_selected = False
+        card.node.is_selected = False
+        card.is_pending_update = False
+        card.is_pending_reinstall = False
+        card.is_from_workflow = False
+
+    @classmethod
+    def _arm_card(cls, card, action: MergeAction) -> MergeAction:
+        """Put *card* into the state *action* implies; return what was applied.
+
+        The action is re-checked against what is actually on disk, because
+        :meth:`_card_for_entry` may have rebuilt the node (and therefore
+        recomputed ``is_installed``) since the plan was drawn up. A folder
+        squatting the node's name without being its checkout — untracked, or
+        not a git repo at all — turns an install into a re-clone: cloning over
+        an existing directory silently does nothing.
+        """
+        cls._reset_card(card)
+        node = card.node
+
+        if not node.is_installed:
+            action = MergeAction.INSTALL
+        elif action is MergeAction.INSTALL:
+            action = MergeAction.REINSTALL
+
+        if action is MergeAction.INSTALL:
+            card.is_selected = True
+            node.is_selected = True
+        elif action is MergeAction.UPDATE:
+            card.is_pending_update = True
+        elif action is MergeAction.REINSTALL:
+            card.is_pending_reinstall = True
+
+        if action is not MergeAction.KEEP:
+            # A pending action supersedes the "behind its remote" hint.
+            card.is_needs_update = False
+        if action in (MergeAction.INSTALL, MergeAction.REINSTALL):
+            # Both end in a fresh clone, so its requirements have to be installed.
+            node.is_install_requirements = True
+            card.req_checkbox.blockSignals(True)
+            card.req_checkbox.setChecked(True)
+            card.req_checkbox.blockSignals(False)
+
+        card.refresh()
+        return action
+
+    def _resolve_extra_cards(self, extras) -> tuple[int, int]:
+        """Ask what to do with the tracked nodes the configuration omits.
+
+        Returns ``(marked_to_remove, dropped_from_config)``. Uninstalls are
+        only *marked*: like every other destructive action in this window they
+        run on the next Install, never behind the user's back — and the cards
+        then leave the configuration in :meth:`_refresh_cards`.
+        """
+        self._pending_config_removals = []
+        for existing in extras:
+            self._reset_card(existing.handle)
+            existing.handle.refresh()
+        if not extras:
+            return 0, 0
+
+        dialog = ExtraNodesDialog(
+            [(existing.handle.node.name, existing.is_installed) for existing in extras], self
+        )
+        dialog.exec()
+        decision = dialog.decision()
+        if decision is ExtraNodesDecision.KEEP:
+            print(f"{len(extras)} node(s) absent from the configuration were kept as-is.")
+            return 0, 0
+
+        marked = dropped = 0
+        for index in dialog.selected_indexes():
+            card = extras[index].handle
+            if decision is ExtraNodesDecision.UNINSTALL and card.node.is_installed:
+                card.is_selected = True
+                card.node.is_selected = True
+                card.refresh()
+                self._pending_config_removals.append(card)
+                marked += 1
+                continue
+            # Untracking, or uninstalling something that isn't on disk: drop it
+            # from the config. _on_remove_card demotes an installed node to a
+            # 'Missing' orphan card, so the choice stays reversible.
+            self._on_remove_card(card)
+            dropped += 1
+        return marked, dropped
+
+    def _add_imported_node(self, repo: str, ref: str, description: str) -> NodeCard:
+        """Create and register a fresh card for a loaded/imported node.
+
+        The card is returned unarmed — :meth:`_arm_card` decides how it should
+        look once its state on disk is known.
+        """
         node = CustomNode(repo, ref, description)
-        node.is_selected = True
-        node.is_install_requirements = True
         card = NodeCard(
             node,
             on_ref_saved=self._save_user_settings,
@@ -1146,36 +1261,21 @@ class CustomNodeDeployerApp(QMainWindow):
             on_selection_changed=self._refresh_install_btn,
             on_refresh_requested=self._refresh_card,
         )
-        card.is_selected = True
-        card.req_checkbox.blockSignals(True)
-        card.req_checkbox.setChecked(True)
-        card.req_checkbox.blockSignals(False)
-        card.refresh()
         self.card_grid.add_card(card)
         self._node_cards.append(card)
+        return card
 
-    def _promote_orphan_from_load(self, orphan, repo: str, ref: str, description: str) -> None:
-        """Replace an orphan card with a tracked NodeCard during load-config.
+    def _promote_orphan_from_load(self, orphan, entry) -> NodeCard:
+        """Replace an orphan card with a tracked card carrying *entry*.
 
-        The node is already on disk (that's why it was an orphan); if the loaded
-        ref differs from what's installed, mark the new card as pending update.
+        The node is already on disk — that is what made it an orphan — so the
+        new card's :class:`CustomNode` reports ``is_installed`` on its own and
+        :meth:`_arm_card` settles on keep / update / re-clone from there.
         """
         self.card_grid.remove_card(orphan)
         if orphan in self._orphan_cards:
             self._orphan_cards.remove(orphan)
-        node = CustomNode(repo, ref, description)
-        card = NodeCard(
-            node,
-            on_ref_saved=self._save_user_settings,
-            on_remove=self._on_remove_card,
-            on_selection_changed=self._refresh_install_btn,
-            on_refresh_requested=self._refresh_card,
-        )
-        if node.is_installed and ref != orphan.ref:
-            card.is_pending_update = True
-        card.refresh()
-        self.card_grid.add_card(card)
-        self._node_cards.append(card)
+        return self._add_imported_node(entry.repo, entry.ref, entry.description)
 
     def _on_add_from_workflow(self):
         """Open one or more workflows (JSON or ComfyUI image) and create orphan cards for unknown nodes."""

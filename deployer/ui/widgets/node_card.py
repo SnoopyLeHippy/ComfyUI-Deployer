@@ -30,6 +30,7 @@ class NodeCard(BaseCard):
     ):
         self.node = node
         self.is_pending_update = False
+        self.is_pending_reinstall = False
         self.is_needs_update = False
         self._on_ref_saved = on_ref_saved
         self._on_remove = on_remove
@@ -88,6 +89,8 @@ class NodeCard(BaseCard):
             return CardState.IMPORT
         if self.is_selected:
             return CardState.TO_INSTALL
+        if self.is_pending_reinstall and node.is_installed:
+            return CardState.TO_REINSTALL
         if self.is_pending_update and node.is_installed:
             return CardState.TO_UPDATE
         if self.is_needs_update and node.is_installed:
@@ -129,6 +132,21 @@ class NodeCard(BaseCard):
         self._refresh_text()
         super().refresh()
 
+    def set_node(self, node: CustomNode) -> None:
+        """Swap in a different :class:`CustomNode` without rebuilding the widget.
+
+        Used when loading a configuration changes a tracked node's remote:
+        ``repo`` feeds cached attributes (``name``, ``local_path``,
+        ``is_gitlab_repo``) computed in ``CustomNode.__init__``, so the node
+        object has to be rebuilt — but the card keeps its place in the grid.
+        """
+        self.node = node
+        self.set_name(node.name)
+        self.req_checkbox.blockSignals(True)
+        self.req_checkbox.setChecked(node.is_install_requirements)
+        self.req_checkbox.blockSignals(False)
+        self.refresh()
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
@@ -138,7 +156,7 @@ class NodeCard(BaseCard):
         self.ref_label.setText(f"ref: {self.node.ref}")
         self.ref_label.setStyleSheet(
             theme.CARD_REF_LABEL_PENDING_STYLE
-            if self.is_pending_update
+            if self.is_pending_update or self.is_pending_reinstall
             else theme.CARD_REF_LABEL_STYLE
         )
 

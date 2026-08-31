@@ -85,6 +85,10 @@ class BaseCard(QWidget):
         self.spinner = Spinner(self)
         self._position_spinner()
 
+    def set_name(self, name: str) -> None:
+        """Resync the header label after the card's underlying data changed."""
+        self.name_label.setText(_wrappable(name))
+
     # ------------------------------------------------------------------
     # Subclass hooks
     # ------------------------------------------------------------------

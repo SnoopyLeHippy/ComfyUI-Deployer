@@ -1,6 +1,6 @@
 """Visual states shared by :class:`NodeCard` and :class:`OrphanNodeCard`.
 
-A card's appearance is a function of one of nine discrete states — keeping
+A card's appearance is a function of one of ten discrete states — keeping
 that mapping in a single table lets both card subclasses share their styling
 logic and removes the cascade of ``if is_selected and is_installed: ...``
 branches that used to live in each ``_update_style`` method.
@@ -18,6 +18,7 @@ class CardState(Enum):
     INSTALLED = auto()         # NodeCard, on disk and ref current
     TO_INSTALL = auto()        # NodeCard selected, not yet installed
     TO_UPDATE = auto()         # NodeCard installed, ref drift detected
+    TO_REINSTALL = auto()      # NodeCard installed, but from another remote
     NEED_UPDATE = auto()       # NodeCard installed, branch behind its remote
     TO_REMOVE = auto()         # NodeCard selected, currently installed
     IMPORT = auto()            # Card pulled in from a workflow import
@@ -45,6 +46,11 @@ _STATE_PRESENTATION: dict[CardState, tuple[str, str, str]] = {
     CardState.TO_UPDATE: (
         theme.NODE_CARD_TO_UPDATE_STYLE,
         "To update",
+        theme.BADGE_TO_UPDATE_STYLE,
+    ),
+    CardState.TO_REINSTALL: (
+        theme.NODE_CARD_TO_UPDATE_STYLE,
+        "To re-clone",
         theme.BADGE_TO_UPDATE_STYLE,
     ),
     CardState.NEED_UPDATE: (

@@ -39,6 +39,12 @@ def plan_install(node_cards, orphan_cards) -> InstallPlan:
     node is queued for removal; a selected uninstalled node, for install; a
     card marked as pending-update keeps its install and re-clones at the new
     ref.
+
+    A card marked pending-*reinstall* (its remote changed under the same
+    folder name) lands in **both** ``to_uninstall`` and ``to_install``: a
+    ``git pull`` would fetch the old origin, so the folder has to go before
+    the new remote is cloned. ``_execute_plan`` runs uninstall before install,
+    which makes that pair well-ordered.
     """
     plan = InstallPlan()
     to_install_set: set[CustomNode] = set()
@@ -48,6 +54,10 @@ def plan_install(node_cards, orphan_cards) -> InstallPlan:
         if card.is_selected and node.is_installed:
             plan.to_uninstall.append(node)
         elif card.is_selected and not node.is_installed:
+            plan.to_install.append(node)
+            to_install_set.add(node)
+        elif card.is_pending_reinstall and node.is_installed:
+            plan.to_uninstall.append(node)
             plan.to_install.append(node)
             to_install_set.add(node)
         elif card.is_pending_update and node.is_installed:
