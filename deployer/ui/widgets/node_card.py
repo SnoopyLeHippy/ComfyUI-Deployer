@@ -1,12 +1,22 @@
 """Selectable card representing a single ComfyUI custom node."""
 
 import os
+import subprocess
 import webbrowser
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction
-from PyQt6.QtWidgets import QFileDialog, QLabel, QLineEdit, QMenu, QMessageBox, QVBoxLayout
+from PyQt6.QtWidgets import (
+    QCheckBox,
+    QFileDialog,
+    QLabel,
+    QLineEdit,
+    QMenu,
+    QMessageBox,
+    QVBoxLayout,
+)
 
+from deployer.core import git_ops
 from deployer.core.junctions import read_junction_target, replace_with_junction
 from deployer.core.node import CustomNode
 from deployer.ui import theme
@@ -18,6 +28,7 @@ class NodeCard(BaseCard):
     """Selectable card for a custom node tracked in ``user_settings.json``."""
 
     _MAX_DESC = 60
+    _REVERT_PREVIEW = 15  # changes listed in the revert confirmation before "... and N more"
 
     def __init__(
         self,
@@ -257,12 +268,15 @@ class NodeCard(BaseCard):
         open_explorer_action.setEnabled(self.node.is_installed)
         refresh_action = QAction("Refresh", self)
         refresh_action.setEnabled(self.node.is_installed)
+        revert_action = QAction("Revert changes...", self)
+        revert_action.setEnabled(self.node.is_installed)
         remove_action = QAction("Remove from config", self)
         menu.addAction(open_repo_action)
         menu.addAction(junction_action)
         menu.addAction(open_explorer_action)
         menu.addSeparator()
         menu.addAction(refresh_action)
+        menu.addAction(revert_action)
         menu.addSeparator()
         menu.addAction(remove_action)
         action = menu.exec(self.mapToGlobal(pos))
@@ -275,8 +289,66 @@ class NodeCard(BaseCard):
         elif action == refresh_action:
             if self._on_refresh_requested:
                 self._on_refresh_requested(self)
+        elif action == revert_action:
+            self._revert_changes()
         elif action == remove_action and self._on_remove:
             self._on_remove(self)
+
+    def _revert_changes(self) -> None:
+        """Discard the node's uncommitted git changes, once the user has seen
+        what will be lost. Untracked files are only deleted on request."""
+        title = "Revert changes"
+        name = self.node.name
+        path = self.node.comfyui_path
+        if not git_ops.is_repo_root(path):
+            QMessageBox.warning(self, title, f"{name} is not a git repository.")
+            return
+        try:
+            changes = git_ops.list_changes(path)
+        except (OSError, subprocess.SubprocessError) as exc:
+            QMessageBox.warning(self, title, f"Couldn't read the git status of {name}:\n{exc}")
+            return
+        if not changes:
+            QMessageBox.information(self, title, f"{name} has no local changes.")
+            return
+
+        has_tracked = any(status != "??" for status, _ in changes)
+        has_untracked = any(status == "??" for status, _ in changes)
+        lines = [f"{status}  {change}" for status, change in changes[: self._REVERT_PREVIEW]]
+        if len(changes) > self._REVERT_PREVIEW:
+            lines.append(f"... and {len(changes) - self._REVERT_PREVIEW} more")
+        target = read_junction_target(path)
+        if target:
+            # A junction usually points at a working checkout kept elsewhere.
+            lines.append(f"\nThis folder is a junction: the files are reverted in {target}.")
+
+        box = QMessageBox(self)
+        box.setWindowTitle(title)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText(f"Discard the local changes in {name}? This can't be undone.")
+        box.setInformativeText("\n".join(lines))
+        box.setStandardButtons(QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        box.setStyleSheet(theme.APP_STYLE)
+        untracked_check = None
+        if has_untracked:
+            # Opt-in, unless untracked files are all there is to revert.
+            untracked_check = QCheckBox("Also delete the untracked files (??)")
+            untracked_check.setChecked(not has_tracked)
+            box.setCheckBox(untracked_check)
+        if box.exec() != QMessageBox.StandardButton.Discard:
+            return
+
+        remove_untracked = untracked_check is not None and untracked_check.isChecked()
+        if not has_tracked and not remove_untracked:
+            return
+        try:
+            git_ops.discard_changes(path, remove_untracked=remove_untracked)
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:
+            print(f"{name}: revert failed: {exc}")
+            QMessageBox.warning(self, title, f"Reverting {name} failed, see the console for details.")
+            return
+        print(f"{name}: local changes reverted.")
 
     def _open_in_explorer(self) -> None:
         """Open the node's folder — the junction's real target when it is one."""

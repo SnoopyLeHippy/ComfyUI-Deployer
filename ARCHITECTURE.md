@@ -272,6 +272,11 @@ folder, opts out and stays clickable during an install).
   `build_widget()` only. A `UiAction` never imports PyQt *at all*: rendering it
   is `ui/plugin_actions.py`'s job.
 - `UserSettings` accessors preserve the keys they don't own.
+- Destructive git commands run inside a node folder go through a guard on
+  `git_ops.is_repo_root` (built into `git_ops.discard_changes`, behind the
+  card's *Revert changes...*). git searches the parent directories for a
+  repository, so in a `custom_nodes/` folder that isn't a clone itself — or
+  whose `.git` is broken — a `reset --hard` would hit ComfyUI's own checkout.
 - `plugins/` is gitignored **except** `README.md`,
   `example_copy_models_from_root.py` and `example_ui_actions.py`. The
   `.gitignore` uses `plugins/*` (not `plugins/`) because git cannot re-include
