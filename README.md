@@ -31,6 +31,23 @@ It allow to :
 
 The app use the bundled Python used by comfyUI under (`ComfyUI_windows_portable/python_embeded/python.exe`)
 
+## Command line (no window)
+
+`cli.py` runs the Deployer's jobs without its window, for an installer or another tool to drive. Run it with the portable's Python and `-s`:
+
+```bat
+python_embeded\python.exe -s cli.py install-nodes [--portable DIR]
+python_embeded\python.exe -s cli.py install-deps
+python_embeded\python.exe -s cli.py gui [--portable DIR]
+```
+
+- **`--portable DIR`** — the ComfyUI portable folder to work on (the one holding `ComfyUI\` and `python_embeded\`), which may live anywhere. Default: `DEPLOYER_PORTABLE_DIR`, else this project's own `ComfyUI_windows_portable`.
+- **`install-nodes`** — installs the tracked node list (`user_settings.json`, created from `custom_nodes.json` on a fresh clone) into that ComfyUI: clones the nodes that are missing at their ref, then installs the requirements of every listed node on disk in one pass (bootstrapping `uv`). Nodes already there are left as they are; re-running is safe.
+- **`install-deps`** — installs the window's own packages (PyQt6, pyyaml, uv) into the Python running the command, if missing.
+- **`gui`** — opens the window on that ComfyUI.
+
+`install-nodes` and `install-deps` print **only JSON lines on stdout** — `{"message": …, "progress": 0..1}`, `{"warning": …}`, then one `{"result": …}` — and everything else (git, pip) on stderr, whose last line says why on failure. Exit codes: `0` done, `1` failed (`install-nodes`: a listed node could not be cloned), `2` bad arguments or not a ComfyUI portable folder. They only start `git` and `python -m uv|pip`, never a shell, PowerShell or a `.bat`.
+
 ## Usage
 
 ### Tracking nodes
@@ -224,7 +241,8 @@ Key points:
 ## Configuration files
 
 - **`user_settings.json`** (auto-created) — the tracked node list and the folder overrides set in Advanced Settings. See [`deployer/settings.py`](deployer/settings.py) for the schema.
-- **`.env`** (optional) — used to configure GitLab cloning and the local "GitLab root" (the parent folder where sibling repos live). Supported keys:
+- **`.env`** (optional) — used to configure GitLab cloning and the local "GitLab root" (the parent folder where sibling repos live). Each key can also be set as an environment variable, which wins. Supported keys:
+  - `DEPLOYER_PORTABLE_DIR` — the ComfyUI portable folder to manage instead of `ComfyUI_windows_portable` next to the project (relative paths start from the project folder). The node list stays in this project.
   - `GITLAB_URL`, `GITLAB_SSH` — HTTPS / SSH prefixes used when cloning private GitLab nodes.
   - `GITLAB_ROOT` — direct path to the GitLab root folder. Simplest setup; takes precedence over the gitconfig lookup below.
   - `GITCONFIG_PATH` (defaults to `~/.gitconfig`), `GITCONFIG_SECTION`, `GITCONFIG_KEY` — read the GitLab root from a gitconfig-style ini file. Useful when the path is already declared in `~/.gitconfig` for other tooling. Both `GITCONFIG_SECTION` and `GITCONFIG_KEY` must be set for this branch to activate.

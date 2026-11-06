@@ -8,9 +8,9 @@ have to be re-read on every intervention. Keep it up to date (see `CLAUDE.md`).
 
 A PyQt6 desktop application (Windows only) that manages the installation, update
 and export ("bundle") of a portable ComfyUI install and its custom nodes.
-~11,300 lines of Python across 66 files.
+~12,200 lines of Python across 70 files, plus ~1,000 lines of tests.
 
-Three uses coexist in the same tool:
+Four uses coexist in the same tool:
 1. **Custom-node manager** — card grid, install/update/remove, detection of
    "orphan" nodes (installed but not tracked).
 2. **Bundle creator** — exports either a self-installing `.bat` (small, clones
@@ -18,6 +18,8 @@ Three uses coexist in the same tool:
    include models).
 3. **Plugin system** — adds custom steps to the bundle lifecycle (e.g. copying
    models from a shared folder) and custom buttons to the main window.
+4. **Headless command line** (`cli.py`) — installs the node list into a ComfyUI
+   portable that may live anywhere, for an outside installer to drive.
 
 ## Stack and environment
 
@@ -33,16 +35,19 @@ Three uses coexist in the same tool:
 ## Module map
 
 ```
-main.py                          Entry point, adds deployer/ to the path
+main.py                          Entry point (window), adds deployer/ to the path
+cli.py                           Entry point (command line), adds deployer/ to the path
 CLAUDE.md                        Project instructions (ARCHITECTURE.md rule)
 deployer/
-  config.py                      Path constants + GitLab resolution (.env)
+  __init__.py                    PORTABLE_DIR_ENV — the name config.py and cli.py share
+  cli.py                         install-nodes / install-deps / gui; JSON lines on stdout
+  config.py                      Path constants (portable folder overridable) + GitLab resolution (.env)
   settings.py                    UserSettings — reads/writes user_settings.json
   core/                          Pure business logic (NO Qt import)
     node.py                      CustomNode — a node's model (clone/update/ref)
     git_ops.py                   Subprocess wrappers around `git`
     command_runner.py            stream_command() — run a process, stream its output line by line
-    installer.py                 Orchestrates node install + requirements
+    installer.py                 Orchestrates node install + requirements (window and headless)
     orphans.py                   Detects untracked custom_nodes dirs (URL + folder name)
     workflow_io.py               Extracts the workflow graph (JSON or PNG/WebP/JPEG image)
     workflow_resolver.py         Resolves missing node types → repos (ComfyUI-Manager DB)
@@ -78,6 +83,7 @@ deployer/
     widgets/                     Cards, grid, busy button, spinner, console
     theme/                       Centralised palette + Qt stylesheets
 plugins/                         Local plugins (gitignored except README + example)
+tests/                           unittest suite — run_tests.py runs it, _support.py its sandbox
 ```
 
 ## Key concepts
@@ -87,6 +93,11 @@ A node's model: `repo`, `ref`, `description`. Detects on its own whether the rep
 is a GitLab one (via `.env`: `GITLAB_URL`/`GITLAB_SSH`) to pick HTTPS vs SSH when
 cloning. `is_installed` is computed at construction time **from disk**, not from
 the settings.
+
+`clone()` on a fresh clone checks out the ref — branch, tag or pinned commit —
+and only a ref the repository lacks falls back to the default branch git
+checked out (the `"main"` recorded for a `"master"` repo), which then becomes
+`node.ref`. On an existing folder it is a plain `git checkout <ref>`.
 
 Two module-level helpers give the rest of the code the same identity rules
 without building a node (the constructor touches the filesystem):
@@ -171,6 +182,38 @@ a failed or deselected removal keeps its card), **untrack** (drop from the
 configuration only — the node stays on disk and comes back as a *Missing*
 orphan card, so the choice is reversible), or **keep**. Nothing destructive
 runs during the load itself.
+
+### Portable folder (config.py)
+Every ComfyUI path (`PORTABLE_DIR`, `COMFYUI_DIR`, `PYTHON_EXE`,
+`CUSTOM_NODES_DIR`, `UPDATE_COMFYUI_BAT`…) derives from one folder:
+`DEPLOYER_PORTABLE_DIR` (environment, then `.env`; relative = from the project
+root), else `ComfyUI_windows_portable` next to the project. The project's own
+files — `user_settings.json`, `custom_nodes.json`, `plugins/`, `.cache/` — stay
+in the project, so one Deployer clone manages one portable's node list.
+
+### Headless command line (cli.py → deployer/cli.py)
+`cli.py install-nodes | install-deps | gui`, for an outside installer (the
+MoodMiner ComfyUI-Local plugin runs it on the ComfyUI it installed).
+`--portable DIR` becomes `DEPLOYER_PORTABLE_DIR` before `deployer.config` is
+first imported.
+
+* `install-nodes` → `installer.install_configured_nodes`: the whole list
+  (`load_custom_nodes`, which seeds `user_settings.json` from
+  `custom_nodes.json` on a fresh clone — unlike `headless_install.py`, which
+  installs only a bundle's embedded list), missing nodes cloned at their ref,
+  nodes on disk left alone, then the requirements of **every** listed node on
+  disk in one pass (`ensure_uv` first), so re-running converges. Clone failures
+  are reported and skipped; requirement failures are warnings.
+* `install-deps` — PyQt6, pyyaml, uv into the running interpreter (what
+  `Launch.bat` does).
+* `gui` — `deployer.ui.run()` on that portable.
+
+Output protocol (the MoodMiner plugin-script one, so it can be relayed as is):
+stdout carries only JSON lines — `{"message", "progress": 0..1}`,
+`{"warning"}`, one `{"result"}`. `EventChannel` duplicates descriptor 1 for
+them and points descriptor 1 and `sys.stdout` at stderr, so prints and child
+processes inheriting the handle (`git checkout` writes to stdout) land on
+stderr. Exit 0 / 1 (a listed node still missing) / 2 (usage, not a portable).
 
 ### Bundle pipeline (bundle/builder.py → create_bundle)
 Sequential steps: clone the Deployer (if requested) → download/extract a clean
@@ -272,6 +315,16 @@ folder, opts out and stays clickable during an install).
   `build_widget()` only. A `UiAction` never imports PyQt *at all*: rendering it
   is `ui/plugin_actions.py`'s job.
 - `UserSettings` accessors preserve the keys they don't own.
+- `deployer.config` is read **once, at import** and copied everywhere with
+  `from deployer.config import ...`: `DEPLOYER_PORTABLE_DIR` must be set before
+  its first import. `deployer/cli.py` imports nothing from the package at module
+  level for that reason (and refuses to run if `config` is already loaded).
+- `cli.py install-nodes` / `install-deps` keep stdout for JSON lines; anything
+  else written on that path goes to stderr. They start only `git` and
+  `python -m uv|pip`, with argument lists — no `shell=True`, no PowerShell (the
+  `core/http.py` fallback is not on this path), no `.bat` (`comfy_update`
+  isn't either): endpoint security flags script-host → shell chains.
+  `tests/test_installer.py` spies `subprocess.Popen` to hold this.
 - Destructive git commands run inside a node folder go through a guard on
   `git_ops.is_repo_root` (built into `git_ops.discard_changes`, behind the
   card's *Revert changes...*). git searches the parent directories for a
@@ -303,10 +356,15 @@ the referenced model files.
 ## Improvement leads
 
 - **Decide the fate of the legacy GitLab mode** (keep/document/remove).
-- **Unit tests** for `core/` and `ui/controllers/`: they are already written
-  without a Qt dependency, so they're testable as-is (`plan_install`,
-  `merge_config`, `resolve_workflows`, `workflow_resolver`, `node.py`). The
-  project currently has no tests at all.
+- **More unit tests.** `tests/` (stdlib `unittest`, real git on local temp
+  repos, a fake portable — see `tests/_support.py`) covers `config` (portable
+  override), `CustomNode.clone`, `install_configured_nodes` and `cli.py`. Still
+  untested though Qt-free: `plan_install`, `merge_config`,
+  `resolve_workflows`, `workflow_resolver`, `orphans`.
+- **`load_custom_nodes` re-seeds over a corrupt `user_settings.json`**:
+  `load_raw` returns `{}` on invalid JSON, so the list is rebuilt from
+  `custom_nodes.json` and the file rewritten — its `settings`, `steps` and
+  `plugins` are lost (window and `install-nodes` alike).
 - **`deployer/plugins/builtin/` is still empty.** Now that a plugin can also
   contribute buttons, a couple of obviously-useful ones (open the ComfyUI
   folder, open the log) would be candidates — at the cost of the "no

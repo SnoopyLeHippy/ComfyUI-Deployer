@@ -41,4 +41,10 @@ moved, leave it alone.
 - Colors and Qt styles live in `deployer/ui/theme/` — no hardcoded color
   anywhere else.
 - After any change, check at minimum that everything compiles and imports:
-  `./ComfyUI_windows_portable/python_embeded/python.exe -m compileall -q deployer main.py`
+  `./ComfyUI_windows_portable/python_embeded/python.exe -m compileall -q deployer main.py cli.py tests`
+- Tests: stdlib `unittest` in `tests/test_<area>.py`, run all with
+  `./ComfyUI_windows_portable/python_embeded/python.exe tests/run_tests.py` (not
+  `-m unittest discover`: ComfyUI's own `tests` package shadows this folder).
+  Import `_support` first in a test module — it sandboxes the portable folder
+  and the node list; never let a test touch this clone's `user_settings.json`.
+  A behaviour change or a bug fix ships with its test.
