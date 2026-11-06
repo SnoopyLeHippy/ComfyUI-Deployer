@@ -45,7 +45,7 @@ from deployer.core.package_repair import BrokenPackage, reinstall_packages
 from deployer.core.pip_runner import install_packages
 from deployer.core.junctions import is_junction
 from deployer.core.node import CustomNode, repo_folder_name, repo_identity
-from deployer.core.orphans import discover_orphan_nodes
+from deployer.core.orphans import discover_untracked_nodes
 from deployer.core.workflow_resolver import (
     extract_types_from_node_dir,
     extract_workflow_node_types,
@@ -81,6 +81,7 @@ from deployer.ui.widgets import (
     AddNodeButton,
     BusyButton,
     ConsoleOutput,
+    LinkedNodeCard,
     NodeCard,
     OrphanNodeCard,
     ResponsiveCardGrid,
@@ -218,6 +219,7 @@ class CustomNodeDeployerApp(QMainWindow):
     _comfy_started = pyqtSignal()
     _comfy_stopped = pyqtSignal()
     _orphan_found = pyqtSignal(str, str, str, str, bool)  # name, repo, ref, description, from_workflow
+    _linked_found = pyqtSignal(str, str)  # folder name, junction target
     _workflow_done = pyqtSignal(object)          # dict with resolved/conflicts/unresolved
     _bundle_workflow_resolved = pyqtSignal(object)  # dict for bundle creation path
     _ui_call = pyqtSignal(object)  # marshals a callable onto the UI thread from worker threads
@@ -369,6 +371,7 @@ class CustomNodeDeployerApp(QMainWindow):
         self._comfy_started.connect(self._on_comfy_started)
         self._comfy_stopped.connect(self._on_comfy_stopped)
         self._orphan_found.connect(self._add_orphan_card)
+        self._linked_found.connect(self._add_linked_card)
         self._workflow_done.connect(self._on_workflow_done)
         self._bundle_workflow_resolved.connect(self._on_bundle_workflow_resolved)
         # Queued (cross-thread) connection: emitting from a worker thread runs the
@@ -385,6 +388,8 @@ class CustomNodeDeployerApp(QMainWindow):
         # -- Load nodes -----------------------------------------------------
         self._node_cards: list[NodeCard] = []
         self._orphan_cards: list[OrphanNodeCard] = []
+        # Display only: never in an install plan, a config merge or a workflow match.
+        self._linked_cards: list[LinkedNodeCard] = []
         self._pending_orphan_promotions: list = []
         self._pending_config_removals: list = []
         self._load_nodes()
@@ -441,9 +446,11 @@ class CustomNodeDeployerApp(QMainWindow):
         # clone's origin, and the node would otherwise show up both as an
         # 'Installed' card and as a 'Missing' orphan.
         known_names = {repo_folder_name(card.node.repo) for card in self._node_cards}
-        orphans = discover_orphan_nodes(known_urls, known_names)
-        for name, repo, ref in orphans:
+        untracked = discover_untracked_nodes(known_urls, known_names)
+        for name, repo, ref in untracked.orphans:
             self._orphan_found.emit(name, repo, ref, "", False)
+        for name, target in untracked.linked:
+            self._linked_found.emit(name, target)
 
     def _add_orphan_card(self, name: str, repo: str, ref: str, description: str, from_workflow: bool):
         """UI-thread: create and register an OrphanNodeCard."""
@@ -456,6 +463,12 @@ class CustomNodeDeployerApp(QMainWindow):
         self._orphan_cards.append(card)
         if from_workflow:
             self._refresh_install_btn()
+
+    def _add_linked_card(self, name: str, target: str):
+        """UI-thread: show an untracked junction, read-only (see LinkedNodeCard)."""
+        card = LinkedNodeCard(name, target)
+        self.card_grid.add_card(card)
+        self._linked_cards.append(card)
 
     _UPDATE_CHECK_WORKERS = 8  # concurrent git subprocesses for the checks below
 

@@ -12,7 +12,8 @@ and export ("bundle") of a portable ComfyUI install and its custom nodes.
 
 Four uses coexist in the same tool:
 1. **Custom-node manager** — card grid, install/update/remove, detection of
-   "orphan" nodes (installed but not tracked).
+   "orphan" nodes (installed but not tracked) and of "linked" ones (junctions
+   another program keeps in `custom_nodes`).
 2. **Bundle creator** — exports either a self-installing `.bat` (small, clones
    everything on the recipient's machine) or a full portable folder (heavy, can
    include models).
@@ -48,13 +49,13 @@ deployer/
     git_ops.py                   Subprocess wrappers around `git`
     command_runner.py            stream_command() — run a process, stream its output line by line
     installer.py                 Orchestrates node install + requirements (window and headless)
-    orphans.py                   Detects untracked custom_nodes dirs (URL + folder name)
+    orphans.py                   Untracked custom_nodes dirs (URL + folder name): orphans, linked junctions
     workflow_io.py               Extracts the workflow graph (JSON or PNG/WebP/JPEG image)
     workflow_resolver.py         Resolves missing node types → repos (ComfyUI-Manager DB)
     package_repair.py            5 diagnostic passes + pip package repair
-    junctions.py                 Windows junctions (external models/output/input)
+    junctions.py                 Windows junctions (os.lstat + _winapi, no process)
     pip_runner.py                uv/pip wrapper
-    http.py                      Download with PowerShell fallback (broken SSL)
+    http.py                      Download: certifi, then Windows' trust store (no process)
     filesystem.py                shutil.rmtree read-only helper
     comfy_runner.py              Starts/stops the ComfyUI subprocess
     comfy_update.py              Runs ComfyUI's update_comfyui.bat, preserving the junctions
@@ -114,11 +115,20 @@ without building a node (the constructor touches the filesystem):
 
 Both are the comparison basis for orphan discovery (`core/orphans.py`) and for
 config merging (`ui/controllers/config_merge.py`), and **both** passes are
-needed in each. `discover_orphan_nodes(known_identities, known_folder_names)`
+needed in each. `discover_untracked_nodes(known_identities, known_folder_names)`
 skips a directory matching either: a repo renamed upstream (`owner/Node` to
 `owner/ComfyUI-Node`) leaves the old URL in the clone's `origin` while the
 configuration carries the new one, so identity alone reports that node twice —
 once *Installed*, once *Missing*.
+
+An untracked directory that is a **junction** comes back in `linked`, not in
+`orphans`: another program keeps it there (MoodMiner links its clone as
+`custom_nodes/ComfyUI-MoodMiner`). The window shows it as a read-only
+`LinkedNodeCard` (badge "Linked", never selectable, kept out of `plan_install`,
+`merge_config` and the workflow matching): promoted to the list, an uninstall
+would `os.rmdir` the junction and take that program out of ComfyUI — met in
+real use. A junction the list does track (the GitLab layout) stays a
+`NodeCard`.
 
 ### `user_settings.json` (settings.py)
 Schema:
@@ -130,11 +140,11 @@ created on first launch from `custom_nodes.json` (static fallback) or from the
 legacy GitLab manifest (`SOURCE_NODES_JSON`, see *Legacy*).
 
 ### Card states (ui/widgets/card_state.py)
-`CardState` is a **10-value** enum, each mapped to
+`CardState` is an **11-value** enum, each mapped to
 `(stylesheet, badge_text, badge_stylesheet)` in a table — this avoids the
-cascades of `if is_selected and is_installed: ...` in every widget. `NodeCard`
-and `OrphanNodeCard` share everything through `BaseCard` and only diverge on
-`_build_body` / `_current_state`.
+cascades of `if is_selected and is_installed: ...` in every widget. `NodeCard`,
+`OrphanNodeCard` and `LinkedNodeCard` share everything through `BaseCard` and
+only diverge on `_build_body` / `_current_state` (and `_can_toggle_selection`).
 
 ### Install plan (ui/controllers/install_planner.py)
 `plan_install(node_cards, orphan_cards) -> InstallPlan` translates card state
@@ -321,10 +331,17 @@ folder, opts out and stays clickable during an install).
   level for that reason (and refuses to run if `config` is already loaded).
 - `cli.py install-nodes` / `install-deps` keep stdout for JSON lines; anything
   else written on that path goes to stderr. They start only `git` and
-  `python -m uv|pip`, with argument lists — no `shell=True`, no PowerShell (the
-  `core/http.py` fallback is not on this path), no `.bat` (`comfy_update`
-  isn't either): endpoint security flags script-host → shell chains.
-  `tests/test_installer.py` spies `subprocess.Popen` to hold this.
+  `python -m uv|pip`, with argument lists — no `shell=True`, no PowerShell, no
+  `.bat` (`comfy_update` isn't on this path): endpoint security flags
+  script-host → shell chains. `tests/test_installer.py` spies `subprocess.Popen`
+  to hold this.
+- **Junctions and downloads start no process**, window included:
+  `core/junctions.py` reads reparse points with `os.lstat` and creates
+  junctions with `_winapi.CreateJunction` (the target must exist), never
+  `fsutil` nor `cmd /c mklink`; `core/http.py` retries a certifi failure with
+  Windows' trust store instead of PowerShell. `tests/test_junctions.py` and
+  `tests/test_http.py` spy `Popen`. What still starts a shell lives in the
+  window only: ComfyUI's `update_comfyui.bat` and the generated bundle `.bat`.
 - Destructive git commands run inside a node folder go through a guard on
   `git_ops.is_repo_root` (built into `git_ops.discard_changes`, behind the
   card's *Revert changes...*). git searches the parent directories for a
@@ -358,9 +375,9 @@ the referenced model files.
 - **Decide the fate of the legacy GitLab mode** (keep/document/remove).
 - **More unit tests.** `tests/` (stdlib `unittest`, real git on local temp
   repos, a fake portable — see `tests/_support.py`) covers `config` (portable
-  override), `CustomNode.clone`, `install_configured_nodes` and `cli.py`. Still
-  untested though Qt-free: `plan_install`, `merge_config`,
-  `resolve_workflows`, `workflow_resolver`, `orphans`.
+  override), `CustomNode.clone`, `install_configured_nodes`, `cli.py`,
+  `junctions`, `http` and `orphans`. Still untested though Qt-free:
+  `plan_install`, `merge_config`, `resolve_workflows`, `workflow_resolver`.
 - **`load_custom_nodes` re-seeds over a corrupt `user_settings.json`**:
   `load_raw` returns `{}` on invalid JSON, so the list is rebuilt from
   `custom_nodes.json` and the file rewritten — its `settings`, `steps` and

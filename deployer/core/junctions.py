@@ -4,11 +4,16 @@ A junction is a Windows reparse point that makes a folder transparently
 appear at another location. Junctions don't require admin elevation, which
 is why ComfyUI Deployer uses them to share custom-node and model folders
 between the GitLab clone roots and ComfyUI's expected layout.
+
+No process is started here: junctions are read with ``os.lstat`` and created
+through the Windows API (``_winapi.CreateJunction``), never ``fsutil`` nor
+``cmd /c mklink`` — endpoint security flags script-host → shell chains, and
+the window checks every ``custom_nodes`` folder as it opens.
 """
 
 import os
 import shutil
-import subprocess
+import stat
 
 from deployer.core.filesystem import force_remove_readonly
 
@@ -38,20 +43,29 @@ def read_junction_target(path: str) -> str:
 
 
 def is_junction(path: str) -> bool:
-    """Return ``True`` if *path* is a Windows directory junction."""
-    result = subprocess.run(
-        ["fsutil", "reparsepoint", "query", path],
-        capture_output=True,
-    )
-    return result.returncode == 0
+    """Return ``True`` if *path* is a Windows directory junction.
+
+    Any reparse point counts (a directory symlink too), as ``fsutil reparsepoint
+    query`` answered before: callers remove such a path with ``os.rmdir`` — the
+    link only, never what it points at. A missing path is ``False``.
+    """
+    try:
+        attributes = getattr(os.lstat(path), "st_file_attributes", 0)
+    except (OSError, ValueError):
+        return False
+    return bool(attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
 
 
 def create_junction(link: str, target: str) -> None:
-    """Create a junction at *link* pointing to *target* (no admin required)."""
-    subprocess.run(
-        ["cmd", "/c", "mklink", "/J", link, target],
-        check=True,
-    )
+    """Create a junction at *link* pointing to *target* (no admin required).
+
+    *target* must exist (``OSError`` otherwise); *link* must not.
+    """
+    import _winapi  # Windows only, like junctions themselves
+
+    if not os.path.isdir(target):
+        raise FileNotFoundError(f"junction target is not a folder: {target}")
+    _winapi.CreateJunction(os.path.abspath(target), os.path.abspath(link))
 
 
 def replace_with_junction(path: str, target: str) -> None:
