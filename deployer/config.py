@@ -3,6 +3,8 @@
 import configparser
 import os
 
+from deployer import PORTABLE_DIR_ENV
+
 
 # Project root directory (parent of the deployer package)
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -46,6 +48,25 @@ _ENV_VALUES = _load_env_file(ENV_FILE)
 def _get_optional_env(name: str) -> str:
     """Return an optional environment value, defaulting to an empty string."""
     return os.getenv(name, _ENV_VALUES.get(name, "")).strip()
+
+
+def _resolve_portable_dir() -> str:
+    """Return the ComfyUI portable folder every path below derives from.
+
+    ``DEPLOYER_PORTABLE_DIR`` (environment, then ``.env``) points the whole tool
+    at a portable install it doesn't own — e.g. one an outside installer put
+    elsewhere; a relative value is read from the project root. Default: the
+    ``ComfyUI_windows_portable`` folder ``Launch.bat`` downloads next to the
+    project.
+
+    Read once, at import: every module copies these constants with
+    ``from deployer.config import ...``, so the variable must be set before the
+    first import of this module (``deployer.cli`` does it for ``--portable``).
+    """
+    override = _get_optional_env(PORTABLE_DIR_ENV)
+    if override:
+        return os.path.normpath(os.path.join(PROJECT_ROOT, override))
+    return os.path.join(PROJECT_ROOT, "ComfyUI_windows_portable")
 
 
 def _normalize_gitlab_url(value: str) -> str:
@@ -103,7 +124,7 @@ GITLAB_URL = _normalize_gitlab_url(_get_optional_env("GITLAB_URL"))
 GITLAB_SSH = _normalize_gitlab_ssh(_get_optional_env("GITLAB_SSH"))
 
 # -- ComfyUI portable paths ------------------------------------------------
-PORTABLE_DIR = os.path.join(PROJECT_ROOT, "ComfyUI_windows_portable")
+PORTABLE_DIR = _resolve_portable_dir()
 COMFYUI_DIR = os.path.join(PORTABLE_DIR, "ComfyUI")
 PYTHON_EXE = os.path.join(PORTABLE_DIR, "python_embeded", "python.exe")
 CUSTOM_NODES_DIR = os.path.join(COMFYUI_DIR, "custom_nodes")

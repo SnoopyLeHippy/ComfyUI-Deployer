@@ -2,8 +2,12 @@
 
 import json
 import os
+import subprocess
+from dataclasses import asdict, dataclass, field
+from typing import Callable
 
 from deployer.config import (
+    CUSTOM_NODES_DIR,
     INSIGHTFACE_WHL,
     LOCAL_NODES_JSON,
     PYTHON_EXE,
@@ -11,6 +15,7 @@ from deployer.config import (
 )
 from deployer.core.node import CustomNode
 from deployer.core.pip_runner import (
+    ensure_uv,
     find_requirement_files,
     install_packages,
     install_requirement_files,
@@ -18,12 +23,31 @@ from deployer.core.pip_runner import (
 from deployer.settings import UserSettings
 
 
+# Share of the overall progress spent cloning; requirements take the rest.
+_CLONE_SHARE = 0.7
+
+
 # ---------------------------------------------------------------------------
 # Loading node definitions
 # ---------------------------------------------------------------------------
 
+def _has_repo(entry) -> bool:
+    return isinstance(entry, dict) and isinstance(entry.get("repo"), str) and bool(entry["repo"].strip())
+
+
+def _node_from_entry(entry: dict) -> CustomNode:
+    """Build a node from a list entry; ``ref`` and ``description`` are optional."""
+    return CustomNode(entry["repo"], entry.get("ref") or "main", entry.get("description") or "")
+
+
 def load_custom_nodes() -> list[CustomNode]:
-    """Load custom node definitions, using ``user_settings.json`` when available."""
+    """Load custom node definitions, using ``user_settings.json`` when available.
+
+    On a fresh clone (no ``user_settings.json``, or one without nodes) the list
+    is seeded from the manifests — the legacy GitLab one, then the tracked
+    ``custom_nodes.json`` — and persisted to ``user_settings.json``. Entries
+    without a ``repo`` are skipped; ``ref`` defaults to ``"main"``.
+    """
 
     def _entries_from_path(json_path: str) -> list[dict]:
         with open(json_path, "r", encoding="utf-8") as fh:
@@ -37,7 +61,7 @@ def load_custom_nodes() -> list[CustomNode]:
     if UserSettings.exists():
         entries = UserSettings.load_nodes()
         if entries:
-            return [CustomNode(e["repo"], e["ref"], e["description"]) for e in entries]
+            return [_node_from_entry(e) for e in entries if _has_repo(e)]
 
     # Otherwise build from the default manifests and persist to user_settings.json
     raw_entries: list[dict] = []
@@ -46,13 +70,13 @@ def load_custom_nodes() -> list[CustomNode]:
         if not os.path.exists(json_path):
             continue
         for entry in _entries_from_path(json_path):
-            if entry["repo"] not in seen:
+            if _has_repo(entry) and entry["repo"] not in seen:
                 seen.add(entry["repo"])
                 raw_entries.append(entry)
 
     UserSettings.save_nodes(raw_entries)
 
-    return [CustomNode(e["repo"], e["ref"], e["description"]) for e in raw_entries]
+    return [_node_from_entry(e) for e in raw_entries]
 
 
 # ---------------------------------------------------------------------------
@@ -73,15 +97,16 @@ def install_nodes(nodes: list[CustomNode]) -> None:
 # Pip requirements
 # ---------------------------------------------------------------------------
 
-def install_requirements(nodes: list[CustomNode], max_depth: int = 4) -> None:
+def install_requirements(nodes: list[CustomNode], max_depth: int = 4) -> list[str]:
     """Install pip requirements for the given nodes.
 
     Walks each node directory up to *max_depth* levels, collects every
     ``requirements.txt`` found and installs them in a single resolver pass
-    (via :func:`install_requirement_files`).
+    (via :func:`install_requirement_files`). Returns the requirements files
+    that failed to install.
     """
     if not nodes:
-        return
+        return []
 
     print("Installing requirements...")
 
@@ -93,7 +118,7 @@ def install_requirements(nodes: list[CustomNode], max_depth: int = 4) -> None:
     for node in nodes:
         req_files.extend(find_requirement_files(node.comfyui_path, max_depth))
 
-    install_requirement_files(PYTHON_EXE, req_files)
+    return install_requirement_files(PYTHON_EXE, req_files)
 
 
 # ---------------------------------------------------------------------------
@@ -107,3 +132,79 @@ def install(
     """Run the complete installation pipeline in the correct order."""
     install_nodes(nodes_to_install)
     install_requirements(nodes_with_requirements)
+
+
+# ---------------------------------------------------------------------------
+# Headless install of the whole list (``cli.py install-nodes``)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class NodeInstallReport:
+    """What :func:`install_configured_nodes` did, by node folder name."""
+
+    installed: list[str] = field(default_factory=list)  # cloned by this run
+    present: list[str] = field(default_factory=list)  # already on disk, left as is
+    failed: list[dict] = field(default_factory=list)  # {"name", "repo", "error"}
+    requirements_failed: list[str] = field(default_factory=list)  # requirements.txt paths
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+
+def install_configured_nodes(
+    progress: Callable[[str, float], None] = lambda message, fraction: None,
+    warn: Callable[[str], None] = lambda message: None,
+) -> NodeInstallReport:
+    """Make every node of the configured list present in ComfyUI, with its requirements.
+
+    The headless counterpart of the window's *Install*, with no selection: the
+    whole list (:func:`load_custom_nodes` — ``user_settings.json``, seeded from
+    ``custom_nodes.json`` on a fresh clone). A node already on disk is left as
+    it is — no update, no ref change, that stays the window's call; the others
+    are cloned at their ref. Then the requirements of **every** listed node on
+    disk are installed in one pass: re-running converges, so a run interrupted
+    between its clones and its requirements still ends with working nodes.
+
+    A node that fails to clone is reported in ``failed`` and never stops the
+    others. *progress* receives ``(message, fraction 0..1)``, *warn* a message
+    for each failure; git's and pip's own output is printed.
+
+    Only ``git`` and ``python -m uv|pip`` are started, with direct argument
+    lists — no shell, no PowerShell, no ``.bat``.
+    """
+    report = NodeInstallReport()
+    nodes = load_custom_nodes()
+    os.makedirs(CUSTOM_NODES_DIR, exist_ok=True)
+
+    total = len(nodes)
+    for index, node in enumerate(nodes):
+        # Checked here, not through node.is_installed (computed at construction):
+        # two entries sharing a folder name must not clone twice.
+        if os.path.exists(node.local_path):
+            report.present.append(node.name)
+            continue
+        progress(f"Installing {node.name} ({index + 1}/{total})", _CLONE_SHARE * index / total)
+        try:
+            node.clone()
+        except (subprocess.CalledProcessError, OSError) as exc:
+            report.failed.append({"name": node.name, "repo": node.repo, "error": str(exc)})
+            warn(f"{node.name} could not be installed from {node.repo}: {exc}")
+            continue
+        report.installed.append(node.name)
+
+    on_disk = [node for node in nodes if os.path.isdir(node.local_path)]
+    req_files: list[str] = []
+    for node in on_disk:
+        req_files.extend(find_requirement_files(node.local_path, 4))
+    if req_files or (on_disk and os.path.exists(INSIGHTFACE_WHL)):
+        progress("Installing the custom nodes' requirements...", _CLONE_SHARE)
+        # The portable archive ships without uv; pip's fallback (-U) could
+        # replace its CUDA torch build — see ensure_uv.
+        if not ensure_uv(PYTHON_EXE):
+            warn("uv could not be installed; the requirements go through pip.")
+        report.requirements_failed = install_requirements(on_disk)
+        for path in report.requirements_failed:
+            warn(f"Some requirements could not be installed: {path}")
+
+    progress("Custom nodes installed.", 1.0)
+    return report

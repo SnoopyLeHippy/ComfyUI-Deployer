@@ -119,14 +119,15 @@ def install_requirement_files(
     req_files: list[str],
     *,
     stream_output: bool = True,
-) -> None:
+) -> list[str]:
     """Install one or more requirements.txt files in a single resolver pass.
 
     On failure, retries each file individually so a single bad node doesn't
-    block the rest.
+    block the rest. Returns the files that still failed on their own retry
+    (``[]`` when everything installed).
     """
     if not req_files:
-        return
+        return []
 
     base, label = _base_cmd(python_exe)
     flat: list[str] = []
@@ -137,14 +138,17 @@ def install_requirement_files(
     print(f"  {label} {pretty}")
     rc = run_command(base + flat, stream_output=stream_output)
     if rc == 0:
-        return
+        return []
 
     print(f"  Grouped install exited with code {rc}; retrying per file...")
+    failed: list[str] = []
     for req in req_files:
         print(f"  {label} -r {_display_path(req)}")
         rc_one = run_command(base + ["-r", req], stream_output=stream_output)
         if rc_one != 0:
             print(f"  exited with code {rc_one} for {req}")
+            failed.append(req)
+    return failed
 
 
 def install_packages(

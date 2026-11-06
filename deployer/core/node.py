@@ -140,24 +140,32 @@ class CustomNode:
     # -- Actions ------------------------------------------------------------
 
     def clone(self) -> None:
-        """Clone the repo if absent, then checkout the configured ref."""
-        just_cloned = not os.path.exists(self.local_path)
-        if just_cloned:
-            print(f"Cloning {self.repo}...")
-            git_ops.clone(self.clone_url, self.name, cwd=CUSTOM_NODES_DIR)
+        """Clone the repo if absent, then checkout the configured ref.
 
-        # After a fresh clone git already checked out the default branch.
-        # Detect the actual branch so we don't fail when self.ref ("main") differs
-        # from the repo's real default branch ("master", etc.).
-        if just_cloned:
-            actual = git_ops.get_current_branch(self.local_path)
-            if actual and actual not in ("HEAD",) and actual != self.ref:
-                print(f"Default branch is '{actual}'; using it instead of '{self.ref}'.")
-                self.ref = actual
-                return  # already on the correct branch, no checkout needed
+        On a fresh clone the ref (a branch, a tag or a pinned commit) is checked
+        out when the repository has it. Only a ref it lacks falls back to the
+        default branch git already checked out — the ``"main"`` recorded for a
+        repo whose default is ``"master"`` — and that branch becomes the node's
+        ref.
+        """
+        if os.path.exists(self.local_path):
+            print(f"Checking out {self.ref}...")
+            git_ops.checkout(self.ref, cwd=self.local_path)
+            return
 
+        print(f"Cloning {self.repo}...")
+        git_ops.clone(self.clone_url, self.name, cwd=CUSTOM_NODES_DIR)
+        actual = git_ops.get_current_branch(self.local_path)
+        if actual == self.ref:
+            return  # already on it
         print(f"Checking out {self.ref}...")
-        git_ops.checkout(self.ref, cwd=self.local_path)
+        try:
+            git_ops.checkout(self.ref, cwd=self.local_path)
+        except subprocess.CalledProcessError:
+            if not actual or actual == "HEAD":
+                raise
+            print(f"'{self.ref}' not found; using the default branch '{actual}' instead.")
+            self.ref = actual
 
     def update(self) -> None:
         """Bring an installed node up to date with its configured ref.

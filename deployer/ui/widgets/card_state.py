@@ -24,6 +24,7 @@ class CardState(Enum):
     IMPORT = auto()            # Card pulled in from a workflow import
     MISSING = auto()           # OrphanNodeCard, default appearance
     ADD_TO_CONFIG = auto()     # OrphanNodeCard selected for promotion
+    LINKED = auto()            # LinkedNodeCard: a junction another program keeps
 
 
 # (stylesheet, badge_text, badge_stylesheet)
@@ -77,6 +78,11 @@ _STATE_PRESENTATION: dict[CardState, tuple[str, str, str]] = {
         theme.NODE_CARD_ORPHAN_SELECTED_STYLE,
         "Add to config",
         theme.BADGE_ADD_TO_CONFIG_STYLE,
+    ),
+    CardState.LINKED: (
+        theme.NODE_CARD_ORPHAN_STYLE,
+        "Linked",
+        theme.NOT_INSTALLED_BADGE_STYLE,
     ),
 }
 

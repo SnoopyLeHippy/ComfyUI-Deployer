@@ -1,74 +1,60 @@
-"""HTTP download helpers with a PowerShell fallback for broken SSL stores.
+"""HTTP download helper: ``urllib`` with certifi, then with Windows' own trust store.
 
 Some Windows installs ship the embedded Python with a stale CA bundle, which
-makes ``urllib`` fail on HTTPS even when ``certifi`` is present. PowerShell's
-``Invoke-WebRequest`` uses the OS trust store and consistently works in those
-cases, so we keep it as a fallback.
+makes ``urllib`` fail on HTTPS even when ``certifi`` is present — and a
+company proxy that inspects TLS signs with a root only Windows' certificate
+store holds. So a failed attempt with certifi is retried once with the
+system's default context, which on Windows loads the machine's ROOT and CA
+stores: what a PowerShell ``Invoke-WebRequest`` used to be started for here.
 
-The URL and destination path are passed to PowerShell via **environment
-variables** rather than interpolated into the command string. This prevents
-quote / single-quote / backtick characters in user-provided paths from
-breaking out of the script.
+No process is started: endpoint security flags a script host launching
+PowerShell, and the window reaches this path (workflow resolution).
 """
 
-import os
 import ssl
-import subprocess
-import sys
 import urllib.error
 import urllib.request
 
 
-def _ssl_context() -> ssl.SSLContext:
+def _certifi_context() -> ssl.SSLContext | None:
     try:
         import certifi
-        return ssl.create_default_context(cafile=certifi.where())
     except ImportError:
-        return ssl.create_default_context()
+        return None
+    return ssl.create_default_context(cafile=certifi.where())
 
 
-def _download_urllib(url: str, dest_path: str, *, timeout: int) -> None:
+def _contexts() -> list[ssl.SSLContext]:
+    """certifi's bundle first when installed, then the system's trust store."""
+    certifi_context = _certifi_context()
+    system = ssl.create_default_context()
+    return [certifi_context, system] if certifi_context is not None else [system]
+
+
+def _download_urllib(url: str, dest_path: str, *, timeout: int, context: ssl.SSLContext) -> None:
     req = urllib.request.Request(url, headers={"User-Agent": "ComfyUI-Deployer"})
-    with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as resp:
+    with urllib.request.urlopen(req, timeout=timeout, context=context) as resp:
         payload = resp.read()
     with open(dest_path, "wb") as fh:
         fh.write(payload)
 
 
-def _download_powershell(url: str, dest_path: str, *, timeout: int) -> None:
-    """Fallback for Windows machines with a broken Python SSL trust store.
-
-    Passes URL/dest via env vars so values containing apostrophes, dollar
-    signs or backticks can't break out of the PS script.
-    """
-    if sys.platform != "win32":
-        raise RuntimeError("PowerShell fallback only available on Windows")
-    env = os.environ.copy()
-    env["DL_URL"] = url
-    env["DL_DEST"] = dest_path
-    script = (
-        "$ProgressPreference = 'SilentlyContinue'; "
-        "Invoke-WebRequest -Uri $env:DL_URL -OutFile $env:DL_DEST -UseBasicParsing"
-    )
-    subprocess.run(
-        ["powershell", "-NoProfile", "-Command", script],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        env=env,
-    )
-
-
 def download_file(url: str, dest_path: str, *, timeout: int = 60) -> None:
-    """Download *url* to *dest_path*. urllib first, PowerShell fallback on SSL/URL errors.
+    """Download *url* to *dest_path*; a failure with certifi is retried with the system store.
 
-    Raises whatever PowerShell raised if both attempts fail.
+    Raises the last attempt's error (``urllib.error.URLError``, ``ssl.SSLError``,
+    ``OSError``) when every attempt fails. An HTTP error status is not retried.
     """
     print(f"Downloading {url}...")
-    try:
-        _download_urllib(url, dest_path, timeout=timeout)
-        return
-    except (urllib.error.URLError, ssl.SSLError) as exc:
-        print(f"  urllib failed ({exc.__class__.__name__}); trying PowerShell fallback...")
-    _download_powershell(url, dest_path, timeout=timeout)
+    contexts = _contexts()
+    for attempt, context in enumerate(contexts, start=1):
+        try:
+            _download_urllib(url, dest_path, timeout=timeout, context=context)
+            return
+        except urllib.error.HTTPError:
+            raise
+        except (urllib.error.URLError, ssl.SSLError, OSError) as exc:
+            if attempt == len(contexts):
+                raise
+            print(f"  download failed ({exc.__class__.__name__}); retrying with the system's "
+                  "certificate store...")
