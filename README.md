@@ -44,7 +44,7 @@ python_embeded\python.exe -s cli.py gui [--portable DIR]
 - **`--portable DIR`** — the ComfyUI portable folder to work on (the one holding `ComfyUI\` and `python_embeded\`), which may live anywhere. Default: `DEPLOYER_PORTABLE_DIR`, else this project's own `ComfyUI_windows_portable`.
 - **`install-nodes`** — installs the tracked node list (`user_settings.json`, created from `custom_nodes.json` on a fresh clone) into that ComfyUI: clones the nodes that are missing at their ref, then installs the requirements of every listed node on disk in one pass (bootstrapping `uv`). Nodes already there are left as they are; re-running is safe.
 - **`install-deps`** — installs the window's own packages (PyQt6, pyyaml, uv) into the Python running the command, if missing.
-- **`gui`** — opens the window on that ComfyUI.
+- **`gui`** — opens the window on that ComfyUI. A program starting it without a console must use `python.exe` with no window (`CREATE_NO_WINDOW`), never `pythonw.exe`: with no console at all, every `git`, `pip` or `fsutil` the window runs opens a console window of its own — hundreds as it opens.
 
 `install-nodes` and `install-deps` print **only JSON lines on stdout** — `{"message": …, "progress": 0..1}`, `{"warning": …}`, then one `{"result": …}` — and everything else (git, pip) on stderr, whose last line says why on failure. Exit codes: `0` done, `1` failed (`install-nodes`: a listed node could not be cloned), `2` bad arguments or not a ComfyUI portable folder. They only start `git` and `python -m uv|pip`, never a shell, PowerShell or a `.bat`.
 
