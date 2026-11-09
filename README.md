@@ -36,13 +36,14 @@ The app use the bundled Python used by comfyUI under (`ComfyUI_windows_portable/
 `cli.py` runs the Deployer's jobs without its window, for an installer or another tool to drive. Run it with the portable's Python and `-s`:
 
 ```bat
-python_embeded\python.exe -s cli.py install-nodes [--portable DIR]
+python_embeded\python.exe -s cli.py install-nodes [--portable DIR] [--nodes-file FILE]
 python_embeded\python.exe -s cli.py install-deps
 python_embeded\python.exe -s cli.py gui [--portable DIR]
 ```
 
 - **`--portable DIR`** — the ComfyUI portable folder to work on (the one holding `ComfyUI\` and `python_embeded\`), which may live anywhere. Default: `DEPLOYER_PORTABLE_DIR`, else this project's own `ComfyUI_windows_portable`.
 - **`install-nodes`** — installs the tracked node list (`user_settings.json`, created from `custom_nodes.json` on a fresh clone) into that ComfyUI: clones the nodes that are missing at their ref, then installs the requirements of every listed node on disk in one pass (bootstrapping `uv`). Nodes already there are left as they are; re-running is safe.
+  - **`--nodes-file FILE`** — an installer's own list, in `custom_nodes.json`'s format (`[{"repo": …, "ref": …, "description": …}]`, `ref` and `description` optional): on a fresh clone it **is** the tracked list (`custom_nodes.json` is not read); otherwise the nodes the list does not track yet — by repository or folder name — are added to it, and the ones it tracks keep their ref. The result's `added` names them. A file that cannot be read, or that lists no node, exits with code `2` and installs nothing.
 - **`install-deps`** — installs the window's own packages (PyQt6, pyyaml, uv) into the Python running the command, if missing.
 - **`gui`** — opens the window on that ComfyUI. A program starting it without a console must use `python.exe` with no window (`CREATE_NO_WINDOW`), never `pythonw.exe`: with no console at all, every `git` or `pip` the window runs opens a console window of its own — hundreds as it opens.
 

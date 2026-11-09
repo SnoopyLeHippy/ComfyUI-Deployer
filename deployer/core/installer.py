@@ -13,7 +13,7 @@ from deployer.config import (
     PYTHON_EXE,
     SOURCE_NODES_JSON,
 )
-from deployer.core.node import CustomNode
+from deployer.core.node import CustomNode, repo_folder_name, repo_identity
 from deployer.core.pip_runner import (
     ensure_uv,
     find_requirement_files,
@@ -40,6 +40,21 @@ def _node_from_entry(entry: dict) -> CustomNode:
     return CustomNode(entry["repo"], entry.get("ref") or "main", entry.get("description") or "")
 
 
+def read_node_list(json_path: str) -> list[dict]:
+    """The entries of a node list file: ``[...]`` (a manifest) or ``{"nodes": [...]}``.
+
+    Entries without a ``repo`` are dropped. Raises ``OSError`` when the file
+    cannot be read, ``ValueError`` when it is not JSON or holds no list.
+    """
+    with open(json_path, "r", encoding="utf-8-sig") as fh:
+        data = json.load(fh)
+    if isinstance(data, dict):
+        data = data.get("nodes", [])
+    if not isinstance(data, list):
+        raise ValueError("it holds no list of nodes")
+    return [entry for entry in data if _has_repo(entry)]
+
+
 def load_custom_nodes() -> list[CustomNode]:
     """Load custom node definitions, using ``user_settings.json`` when available.
 
@@ -48,15 +63,6 @@ def load_custom_nodes() -> list[CustomNode]:
     ``custom_nodes.json`` — and persisted to ``user_settings.json``. Entries
     without a ``repo`` are skipped; ``ref`` defaults to ``"main"``.
     """
-
-    def _entries_from_path(json_path: str) -> list[dict]:
-        with open(json_path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        # user_settings stores {"nodes": [...]} ; plain manifests store [...]
-        if isinstance(data, dict):
-            return data.get("nodes", [])
-        return data
-
     # If user_settings.json exists and is non-empty, use it exclusively
     if UserSettings.exists():
         entries = UserSettings.load_nodes()
@@ -69,14 +75,56 @@ def load_custom_nodes() -> list[CustomNode]:
     for json_path in (SOURCE_NODES_JSON, LOCAL_NODES_JSON):
         if not os.path.exists(json_path):
             continue
-        for entry in _entries_from_path(json_path):
-            if _has_repo(entry) and entry["repo"] not in seen:
+        for entry in read_node_list(json_path):
+            if entry["repo"] not in seen:
                 seen.add(entry["repo"])
                 raw_entries.append(entry)
 
     UserSettings.save_nodes(raw_entries)
 
     return [_node_from_entry(e) for e in raw_entries]
+
+
+def add_listed_nodes(entries: list[dict]) -> list[dict]:
+    """Make *entries* part of the tracked list (``cli.py install-nodes --nodes-file``).
+
+    With no list yet — no ``user_settings.json``, or one without nodes — they
+    **are** the list: the manifests (``custom_nodes.json``) are not read. With
+    one, the entries it does not track are appended; a tracked node — same
+    repository (:func:`repo_identity`) or same folder name
+    (:func:`repo_folder_name`, compared without case: one folder on Windows)
+    — keeps its ref and description, the user's own choice. Duplicates inside
+    *entries* are added once. Only ``repo`` (trimmed), ``ref`` and
+    ``description`` are written; the file's other keys are preserved.
+
+    Returns the entries added.
+    """
+    existing = UserSettings.load_nodes()
+    if not isinstance(existing, list):
+        existing = []
+    tracked = [entry for entry in existing if _has_repo(entry)]
+    if not tracked:
+        existing = []
+    identities = {repo_identity(entry["repo"].strip()) for entry in tracked}
+    folders = {repo_folder_name(entry["repo"].strip()).lower() for entry in tracked}
+    added: list[dict] = []
+    for entry in entries:
+        if not _has_repo(entry):
+            continue
+        repo = entry["repo"].strip()
+        identity, folder = repo_identity(repo), repo_folder_name(repo).lower()
+        if identity in identities or folder in folders:
+            continue
+        identities.add(identity)
+        folders.add(folder)
+        node = {"repo": repo}
+        for key in ("ref", "description"):
+            if isinstance(entry.get(key), str):
+                node[key] = entry[key]
+        added.append(node)
+    if added:
+        UserSettings.save_nodes(existing + added)
+    return added
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +190,7 @@ def install(
 class NodeInstallReport:
     """What :func:`install_configured_nodes` did, by node folder name."""
 
+    added: list[str] = field(default_factory=list)  # added to the list (a --nodes-file)
     installed: list[str] = field(default_factory=list)  # cloned by this run
     present: list[str] = field(default_factory=list)  # already on disk, left as is
     failed: list[dict] = field(default_factory=list)  # {"name", "repo", "error"}
@@ -154,12 +203,15 @@ class NodeInstallReport:
 def install_configured_nodes(
     progress: Callable[[str, float], None] = lambda message, fraction: None,
     warn: Callable[[str], None] = lambda message: None,
+    listed: list[dict] | None = None,
 ) -> NodeInstallReport:
     """Make every node of the configured list present in ComfyUI, with its requirements.
 
     The headless counterpart of the window's *Install*, with no selection: the
     whole list (:func:`load_custom_nodes` — ``user_settings.json``, seeded from
-    ``custom_nodes.json`` on a fresh clone). A node already on disk is left as
+    ``custom_nodes.json`` on a fresh clone). *listed* (an installer's own list)
+    goes into it first (:func:`add_listed_nodes`): the list itself on a fresh
+    clone, added to it otherwise. A node already on disk is left as
     it is — no update, no ref change, that stays the window's call; the others
     are cloned at their ref. Then the requirements of **every** listed node on
     disk are installed in one pass: re-running converges, so a run interrupted
@@ -173,6 +225,8 @@ def install_configured_nodes(
     lists — no shell, no PowerShell, no ``.bat``.
     """
     report = NodeInstallReport()
+    if listed:
+        report.added = [repo_folder_name(entry["repo"]) for entry in add_listed_nodes(listed)]
     nodes = load_custom_nodes()
     os.makedirs(CUSTOM_NODES_DIR, exist_ok=True)
 

@@ -16,7 +16,12 @@ import unittest  # noqa: E402
 
 from _support import ProcessSpy, SandboxTestCase, git, head, make_repo  # noqa: E402
 from deployer import config  # noqa: E402
-from deployer.core.installer import install_configured_nodes, load_custom_nodes  # noqa: E402
+from deployer.core.installer import (  # noqa: E402
+    add_listed_nodes,
+    install_configured_nodes,
+    load_custom_nodes,
+    read_node_list,
+)
 
 
 class InstallConfiguredNodesTest(SandboxTestCase):
@@ -42,11 +47,12 @@ class InstallConfiguredNodesTest(SandboxTestCase):
         with open(self.settings_path, encoding="utf-8") as fh:
             return json.load(fh)
 
-    def run_install(self, exit_code=lambda argv: 0):
+    def run_install(self, exit_code=lambda argv: 0, listed=None):
         with ProcessSpy([config.PYTHON_EXE], exit_code) as spy:
             report = install_configured_nodes(
                 progress=lambda message, fraction: self.progress.append((message, fraction)),
                 warn=self.warnings.append,
+                listed=listed,
             )
         spy.assert_no_shell(self)
         return report, spy
@@ -90,9 +96,39 @@ class InstallConfiguredNodesTest(SandboxTestCase):
 
     def test_an_empty_list_installs_nothing_and_still_ends(self):
         report, spy = self.run_install()
-        self.assertEqual(report.as_dict(), {"installed": [], "present": [], "failed": [], "requirements_failed": []})
+        self.assertEqual(report.as_dict(), {
+            "added": [], "installed": [], "present": [], "failed": [], "requirements_failed": [],
+        })
         self.assertEqual(spy.calls, [])
         self.assertEqual(self.progress[-1][1], 1.0)
+
+    # -- an installer's own list (--nodes-file) ------------------------------
+
+    def test_a_listed_set_is_the_list_of_a_fresh_clone_instead_of_custom_nodes_json(self):
+        a, b, c = self.repo("NodeA"), self.repo("NodeB"), self.repo("NodeC")
+        self.write_manifest([{"repo": a, "ref": "main", "description": "default"}])
+        report, _ = self.run_install(listed=[{"repo": b, "description": "B"}, {"repo": c, "ref": "main"}])
+        self.assertEqual((report.added, report.installed), (["NodeB", "NodeC"], ["NodeB", "NodeC"]))
+        self.assertFalse(os.path.exists(self.node_path("NodeA")))
+        self.assertEqual(self.read_settings()["nodes"], [{"repo": b, "description": "B"}, {"repo": c, "ref": "main"}])
+
+    def test_a_listed_set_is_added_to_an_existing_list_whose_nodes_keep_their_ref(self):
+        a, b = self.repo("NodeA"), self.repo("NodeB")
+        git("branch", "dev", cwd=a)
+        self.write_settings([{"repo": a, "ref": "dev", "description": "mine"}], settings={"model_folder": "M:/models"})
+        report, _ = self.run_install(listed=[{"repo": a, "ref": "main", "description": "theirs"}, {"repo": b}])
+        self.assertEqual((report.added, report.installed), (["NodeB"], ["NodeA", "NodeB"]))
+        self.assertEqual(git("rev-parse", "--abbrev-ref", "HEAD", cwd=self.node_path("NodeA")), "dev")
+        settings = self.read_settings()
+        self.assertEqual(settings["nodes"], [{"repo": a, "ref": "dev", "description": "mine"}, {"repo": b}])
+        self.assertEqual(settings["settings"], {"model_folder": "M:/models"})
+
+    def test_a_list_file_holding_no_node_counts_as_a_fresh_clone(self):
+        b = self.repo("NodeB")
+        self.write_settings([], settings={"output_folder": "O:/out"})
+        report, _ = self.run_install(listed=[{"repo": b}])
+        self.assertEqual(report.installed, ["NodeB"])
+        self.assertEqual(self.read_settings(), {"nodes": [{"repo": b}], "settings": {"output_folder": "O:/out"}})
 
     # -- nodes on disk ------------------------------------------------------
 
@@ -227,6 +263,72 @@ class InstallConfiguredNodesTest(SandboxTestCase):
         _, spy = self.run_install()  # assert_no_shell runs inside
         programs = {os.path.normcase(call["argv"][0]) for call in spy.calls}
         self.assertEqual(programs, {"git", os.path.normcase(config.PYTHON_EXE)})
+
+
+class AddListedNodesTest(SandboxTestCase):
+    """add_listed_nodes and read_node_list alone: the list, no clone."""
+
+    def nodes(self) -> list[dict]:
+        with open(self.settings_path, encoding="utf-8") as fh:
+            return json.load(fh)["nodes"]
+
+    def write_settings(self, nodes: list[dict]) -> None:
+        with open(self.settings_path, "w", encoding="utf-8") as fh:
+            json.dump({"nodes": nodes}, fh)
+
+    def test_a_tracked_repository_is_never_added_again_whatever_its_spelling(self):
+        self.write_settings([
+            {"repo": "https://github.com/owner/NodeA", "ref": "v1"},
+            {"repo": "https://github.com/owner/ComfyUI-Renamed", "ref": "main"},
+        ])
+        added = add_listed_nodes([
+            {"repo": "git@github.com:Owner/NodeA.git", "ref": "main"},  # same repository
+            {"repo": "https://github.com/fork/comfyui-renamed/"},  # same folder name
+            {"repo": "  https://github.com/owner/NodeB.git  ", "ref": "main", "extra": True},
+            {"repo": "https://github.com/OWNER/nodeb"},  # twice in the list itself
+            {"description": "no repo"},
+            "not an entry",
+        ])
+        self.assertEqual(added, [{"repo": "https://github.com/owner/NodeB.git", "ref": "main"}])
+        self.assertEqual([n["repo"] for n in self.nodes()], [
+            "https://github.com/owner/NodeA",
+            "https://github.com/owner/ComfyUI-Renamed",
+            "https://github.com/owner/NodeB.git",
+        ])
+        self.assertEqual(self.nodes()[0]["ref"], "v1")
+
+    def test_nothing_new_writes_nothing(self):
+        self.write_settings([{"repo": "https://github.com/owner/NodeA"}])
+        before = os.path.getmtime(self.settings_path)
+        os.utime(self.settings_path, (before - 10, before - 10))
+        stamp = os.path.getmtime(self.settings_path)
+        self.assertEqual(add_listed_nodes([{"repo": "https://github.com/owner/NodeA.git"}]), [])
+        self.assertEqual(os.path.getmtime(self.settings_path), stamp)
+
+    def test_without_user_settings_the_entries_are_the_list(self):
+        self.assertFalse(os.path.exists(self.settings_path))
+        add_listed_nodes([{"repo": "https://github.com/owner/NodeA", "description": "A"}])
+        self.assertEqual(self.nodes(), [{"repo": "https://github.com/owner/NodeA", "description": "A"}])
+
+    def test_reading_a_node_list_file(self):
+        path = os.path.join(self.work, "list.json")
+        for content, expected in (
+                ('[{"repo": "r1"}, {"ref": "main"}]', [{"repo": "r1"}]),
+                ('﻿{"nodes": [{"repo": "r2", "ref": "v2"}]}', [{"repo": "r2", "ref": "v2"}]),
+                ('{"settings": {}}', []),
+        ):
+            with self.subTest(content=content):
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(content)
+                self.assertEqual(read_node_list(path), expected)
+        for content in ("{ not json", '"a string"', '{"nodes": 3}'):
+            with self.subTest(content=content):
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(content)
+                with self.assertRaises(ValueError):
+                    read_node_list(path)
+        with self.assertRaises(OSError):
+            read_node_list(os.path.join(self.work, "missing.json"))
 
 
 if __name__ == "__main__":

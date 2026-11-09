@@ -137,7 +137,8 @@ Schema:
 Each section has its own read/write accessors that **preserve the other keys**
 (`save_nodes` never touches `settings`, and so on). The file is gitignored and
 created on first launch from `custom_nodes.json` (static fallback) or from the
-legacy GitLab manifest (`SOURCE_NODES_JSON`, see *Legacy*).
+legacy GitLab manifest (`SOURCE_NODES_JSON`, see *Legacy*) — or from an
+installer's own list (`cli.py install-nodes --nodes-file`).
 
 ### Card states (ui/widgets/card_state.py)
 `CardState` is an **11-value** enum, each mapped to
@@ -202,7 +203,7 @@ files — `user_settings.json`, `custom_nodes.json`, `plugins/`, `.cache/` — s
 in the project, so one Deployer clone manages one portable's node list.
 
 ### Headless command line (cli.py → deployer/cli.py)
-`cli.py install-nodes | install-deps | gui`, for an outside installer (the
+`cli.py install-nodes [--nodes-file FILE] | install-deps | gui`, for an outside installer (the
 MoodMiner ComfyUI-Local plugin runs it on the ComfyUI it installed).
 `--portable DIR` becomes `DEPLOYER_PORTABLE_DIR` before `deployer.config` is
 first imported.
@@ -214,6 +215,13 @@ first imported.
   nodes on disk left alone, then the requirements of **every** listed node on
   disk in one pass (`ensure_uv` first), so re-running converges. Clone failures
   are reported and skipped; requirement failures are warnings.
+  `--nodes-file FILE` (`read_node_list`: a manifest's `[...]` or `{"nodes": [...]}`)
+  goes in first through `installer.add_listed_nodes`: the list itself when
+  there is none yet (`custom_nodes.json` not read), else the entries the list
+  does not track — by `repo_identity` or `repo_folder_name`, the latter
+  without case — appended, a tracked node keeping the user's ref. The result's
+  `added` names them. Unreadable or empty → usage error (exit 2), nothing
+  installed: an installer's list is never silently replaced by the default one.
 * `install-deps` — PyQt6, pyyaml, uv into the running interpreter (what
   `Launch.bat` does).
 * `gui` — `deployer.ui.run()` on that portable.

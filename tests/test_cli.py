@@ -87,7 +87,7 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         events = self.events(proc)
         self.assertEqual(events[-1], {"result": {
-            "installed": ["NodeA", "NodeB"], "present": [], "failed": [], "requirements_failed": [],
+            "added": [], "installed": ["NodeA", "NodeB"], "present": [], "failed": [], "requirements_failed": [],
         }})
         progress = [e for e in events if "progress" in e]
         self.assertTrue(progress and all("message" in e for e in progress))
@@ -111,6 +111,49 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual([f["name"] for f in result["failed"]], ["Gone"])
         self.assertTrue(any("Gone" in e.get("warning", "") for e in events))
         self.assertEqual(proc.stderr.strip().splitlines()[-1], "Not installed: Gone.")
+
+    def test_a_nodes_file_is_the_list_of_a_fresh_clone(self):
+        a = make_repo(os.path.join(self.repos, "NodeA"))
+        b = make_repo(os.path.join(self.repos, "NodeB"))
+        self.write_manifest([{"repo": a}])
+        listed = os.path.join(self.work, "studio nodes.json")
+        with open(listed, "w", encoding="utf-8") as fh:
+            json.dump([{"repo": b, "ref": "main", "description": "the studio's"}], fh)
+
+        proc = self.run_cli("install-nodes", "--portable", self.portable, "--nodes-file", listed)
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        result = self.events(proc)[-1]["result"]
+        self.assertEqual((result["added"], result["installed"]), (["NodeB"], ["NodeB"]))
+        self.assertEqual(os.listdir(os.path.join(self.portable, "ComfyUI", "custom_nodes")), ["NodeB"])
+        with open(os.path.join(self.project, "user_settings.json"), encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh)["nodes"], [{"repo": b, "ref": "main", "description": "the studio's"}])
+
+    def test_a_nodes_file_that_cannot_be_used_is_a_usage_error(self):
+        a = make_repo(os.path.join(self.repos, "NodeA"))
+        self.write_manifest([{"repo": a}])
+        listed = os.path.join(self.work, "nodes.json")
+        for content, reason in (
+                (None, "cannot be read as a node list"),
+                ("{ not json", "cannot be read as a node list"),
+                ('"a string"', "cannot be read as a node list"),
+                ("[]", "lists no custom node"),
+                ('[{"ref": "main"}]', "lists no custom node"),
+        ):
+            with self.subTest(content=content):
+                if content is None:
+                    if os.path.exists(listed):
+                        os.remove(listed)
+                else:
+                    with open(listed, "w", encoding="utf-8") as fh:
+                        fh.write(content)
+                proc = self.run_cli("install-nodes", "--portable", self.portable, "--nodes-file", listed)
+                self.assertEqual(proc.returncode, 2)
+                self.assertEqual(proc.stdout, "")
+                self.assertIn(reason, proc.stderr)
+        # Nothing installed, no list written: the default list was never read in its place.
+        self.assertEqual(os.listdir(os.path.join(self.portable, "ComfyUI", "custom_nodes")), [])
+        self.assertFalse(os.path.exists(os.path.join(self.project, "user_settings.json")))
 
     def test_a_folder_that_is_not_a_portable_is_refused_with_exit_code_2(self):
         empty = os.path.join(self.work, "not-comfy")

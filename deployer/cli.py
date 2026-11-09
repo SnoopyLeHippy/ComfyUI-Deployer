@@ -4,7 +4,7 @@ Run through the ``cli.py`` launcher at the project root (the embedded python
 ignores the working directory, so ``python -m deployer.cli`` can't find the
 package)::
 
-    python -s cli.py install-nodes [--portable DIR]
+    python -s cli.py install-nodes [--portable DIR] [--nodes-file FILE]
     python -s cli.py install-deps
     python -s cli.py gui [--portable DIR]
 
@@ -13,6 +13,12 @@ holding ``ComfyUI\\`` and ``python_embeded\\``); default: ``DEPLOYER_PORTABLE_DI
 else the project's own ``ComfyUI_windows_portable``. It is turned into that
 environment variable **before** :mod:`deployer.config` is first imported, which
 is why this module imports nothing from the package at the top.
+
+``--nodes-file`` is an installer's own node list (``[{"repo", "ref"?,
+"description"?}]``, or ``{"nodes": [...]}``): the tracked list on a fresh clone
+— instead of ``custom_nodes.json`` — and added to an existing one
+(``installer.add_listed_nodes``). A file that cannot be read, or that lists no
+node, is a usage error.
 
 Output of ``install-nodes`` / ``install-deps``: stdout carries **only** JSON
 lines — ``{"message", "progress": 0..1}``, ``{"warning"}``, then one
@@ -94,12 +100,29 @@ def _require_portable() -> None:
         )
 
 
-def install_nodes(channel: EventChannel) -> int:
-    """Clone the configured nodes missing from ComfyUI and install their requirements."""
+def _read_nodes_file(path: str) -> list[dict]:
+    """The entries of ``--nodes-file``; unreadable or empty is a usage error."""
+    from deployer.core.installer import read_node_list
+
+    try:
+        entries = read_node_list(path)
+    except (OSError, ValueError) as exc:
+        raise UsageError(f"{path} cannot be read as a node list: {exc}") from exc
+    if not entries:
+        raise UsageError(f"{path} lists no custom node (an entry needs a \"repo\").")
+    return entries
+
+
+def install_nodes(channel: EventChannel, nodes_file: str | None = None) -> int:
+    """Clone the configured nodes missing from ComfyUI and install their requirements.
+
+    *nodes_file* (``--nodes-file``) goes into the configured list first.
+    """
     _require_portable()
     from deployer.core.installer import install_configured_nodes
 
-    report = install_configured_nodes(progress=channel.message, warn=channel.warning)
+    listed = _read_nodes_file(nodes_file) if nodes_file is not None else None
+    report = install_configured_nodes(progress=channel.message, warn=channel.warning, listed=listed)
     channel.result(report.as_dict())
     if report.failed:
         names = ", ".join(entry["name"] for entry in report.failed)
@@ -156,9 +179,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser = argparse.ArgumentParser(prog="cli.py", description="ComfyUI Deployer without its window.")
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser(
+    install = commands.add_parser(
         "install-nodes", parents=[portable],
         help="clone the configured custom nodes missing from ComfyUI, then install their requirements",
+    )
+    install.add_argument(
+        "--nodes-file",
+        metavar="FILE",
+        help="a JSON node list: the list on a fresh clone (instead of custom_nodes.json), "
+             "added to the existing list otherwise",
     )
     commands.add_parser("install-deps", help="install the Deployer's own packages (PyQt6, pyyaml, uv) if missing")
     commands.add_parser("gui", parents=[portable], help="open the Deployer's window on that ComfyUI")
@@ -181,7 +210,7 @@ def main(argv: list[str] | None = None) -> int:
             return gui()
         channel = EventChannel()
         if args.command == "install-nodes":
-            return install_nodes(channel)
+            return install_nodes(channel, args.nodes_file)
         return install_deps(channel)
     except UsageError as exc:
         print(str(exc), file=sys.stderr, flush=True)
