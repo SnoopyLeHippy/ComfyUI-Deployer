@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 
 from deployer.config import COMFYUI_DIR, CUSTOM_NODES_DIR, PYTHON_EXE
 from deployer.core.filesystem import force_remove_readonly
+from deployer.core.junctions import read_link_file
 from deployer.core.pip_runner import ensure_uv, run_command, uv_available
 
 
@@ -542,6 +543,10 @@ def run_shadow_scan(python_exe: str = PYTHON_EXE) -> list[BrokenPackage]:
                 continue
             match = candidates_ci.get(entry_lower)
             if not match:
+                continue
+            # A link folder needs no Python file of its own (its code lives at
+            # the target) and belongs to another program: never deleted here.
+            if read_link_file(full) is not None:
                 continue
             _top_name, dist_name = match
             # If the dir has real package files, it's a legitimate copy

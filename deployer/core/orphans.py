@@ -18,11 +18,20 @@ Both comparisons are needed, and neither alone is enough:
   folder is plainly that node's. Without this pass it shows up twice — once
   *Installed*, once *Missing*.
 
-An untracked folder that is a **junction** is not an orphan but a *linked*
-node: another program put it there and keeps it (MoodMiner links its own
-clone as ``custom_nodes/ComfyUI-MoodMiner``). It is listed apart, so the window
-can show it without offering to track it — tracking it would let an install
-remove it, and removing a junction takes the other program out of ComfyUI.
+An untracked folder another program put there and keeps is not an orphan but
+a *linked* node, whichever way it was linked:
+
+* a **junction** to a clone of that program's (the documented MoodMiner dev
+  setup, older MoodMiner installs);
+* a **link folder** — a real folder holding ``linked-node.json``
+  (:data:`~deployer.core.junctions.LINK_FILE`), whose code lives at the target
+  the file names. It has no ``.git``, so it is recognised before that filter.
+  MoodMiner writes one as ``custom_nodes/ComfyUI-MoodMiner``: the processes it
+  starts cannot cross a junction made without admin rights.
+
+It is listed apart, so the window can show it without offering to track it —
+tracking it would let an install remove it, and with it the other program
+from ComfyUI.
 """
 
 import os
@@ -30,12 +39,12 @@ from typing import NamedTuple
 
 from deployer.config import CUSTOM_NODES_DIR
 from deployer.core import git_ops
-from deployer.core.junctions import is_junction, read_junction_target
+from deployer.core.junctions import is_junction, read_junction_target, read_link_file
 from deployer.core.node import repo_identity
 
 
 OrphanNode = tuple[str, str, str]  # (folder_name, remote_url, ref)
-LinkedNode = tuple[str, str]  # (folder_name, junction_target)
+LinkedNode = tuple[str, str]  # (folder_name, target: junction target or link file's)
 
 
 class UntrackedNodes(NamedTuple):
@@ -47,15 +56,17 @@ def discover_untracked_nodes(
     known_repo_identities: set[str],
     known_folder_names: set[str],
 ) -> UntrackedNodes:
-    """Return the git-backed subdirectories of ``CUSTOM_NODES_DIR`` nothing tracks.
+    """Return the subdirectories of ``CUSTOM_NODES_DIR`` nothing tracks.
 
-    A directory is skipped when its origin is in *known_repo_identities* or its
-    name is in *known_folder_names* (compared case-insensitively, NTFS being
-    case-insensitive itself).
+    A directory is skipped when its name is in *known_folder_names* (compared
+    case-insensitively, NTFS being case-insensitive itself) or, for a clone,
+    when its origin is in *known_repo_identities*.
 
-    ``orphans`` are ``(folder_name, remote_url, ref)``; entries whose origin
-    URL can't be read are skipped — there's nothing the user could do with
-    them. ``linked`` are the junctions among them, ``(folder_name, target)``.
+    ``orphans`` are ``(folder_name, remote_url, ref)``: git clones only,
+    entries whose origin URL can't be read skipped — there's nothing the user
+    could do with them. ``linked`` are ``(folder_name, target)``: the link
+    folders (a missing target is listed all the same, and printed) and the
+    junctions among the clones. Any other folder without ``.git`` is ignored.
     """
     known_folder_names = {name.lower() for name in known_folder_names}
     if not os.path.isdir(CUSTOM_NODES_DIR):
@@ -70,9 +81,15 @@ def discover_untracked_nodes(
     for entry in entries:
         if not entry.is_dir(follow_symlinks=True):
             continue
-        if not os.path.exists(os.path.join(entry.path, ".git")):
-            continue
         if entry.name.lower() in known_folder_names:
+            continue
+        target = read_link_file(entry.path)
+        if target is not None:
+            if not os.path.isdir(target):
+                print(f"Linked: {entry.name} -> {target} (missing)")
+            linked.append((entry.name, target))
+            continue
+        if not os.path.exists(os.path.join(entry.path, ".git")):
             continue
 
         url = git_ops.get_remote_url(entry.path)

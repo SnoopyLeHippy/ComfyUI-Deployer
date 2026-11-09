@@ -12,8 +12,8 @@ and export ("bundle") of a portable ComfyUI install and its custom nodes.
 
 Four uses coexist in the same tool:
 1. **Custom-node manager** — card grid, install/update/remove, detection of
-   "orphan" nodes (installed but not tracked) and of "linked" ones (junctions
-   another program keeps in `custom_nodes`).
+   "orphan" nodes (installed but not tracked) and of "linked" ones (a junction
+   or a `linked-node.json` folder another program keeps in `custom_nodes`).
 2. **Bundle creator** — exports either a self-installing `.bat` (small, clones
    everything on the recipient's machine) or a full portable folder (heavy, can
    include models).
@@ -49,11 +49,11 @@ deployer/
     git_ops.py                   Subprocess wrappers around `git`
     command_runner.py            stream_command() — run a process, stream its output line by line
     installer.py                 Orchestrates node install + requirements (window and headless)
-    orphans.py                   Untracked custom_nodes dirs (URL + folder name): orphans, linked junctions
+    orphans.py                   Untracked custom_nodes dirs (URL + folder name): orphans, linked nodes
     workflow_io.py               Extracts the workflow graph (JSON or PNG/WebP/JPEG image)
     workflow_resolver.py         Resolves missing node types → repos (ComfyUI-Manager DB)
     package_repair.py            5 diagnostic passes + pip package repair
-    junctions.py                 Windows junctions (os.lstat + _winapi, no process)
+    junctions.py                 Windows junctions (os.lstat + _winapi, no process), linked-node.json reader
     pip_runner.py                uv/pip wrapper
     http.py                      Download: certifi, then Windows' trust store (no process)
     filesystem.py                shutil.rmtree read-only helper
@@ -121,14 +121,29 @@ skips a directory matching either: a repo renamed upstream (`owner/Node` to
 configuration carries the new one, so identity alone reports that node twice —
 once *Installed*, once *Missing*.
 
-An untracked directory that is a **junction** comes back in `linked`, not in
-`orphans`: another program keeps it there (MoodMiner links its clone as
-`custom_nodes/ComfyUI-MoodMiner`). The window shows it as a read-only
-`LinkedNodeCard` (badge "Linked", never selectable, kept out of `plan_install`,
-`merge_config` and the workflow matching): promoted to the list, an uninstall
-would `os.rmdir` the junction and take that program out of ComfyUI — met in
-real use. A junction the list does track (the GitLab layout) stays a
-`NodeCard`.
+An untracked directory another program keeps there comes back in `linked`,
+not in `orphans`, as `(folder_name, target)`. Two shapes:
+
+* a **junction** to a clone (MoodMiner's dev setup, older installs);
+* a **link folder** — a real folder holding `linked-node.json` =
+  `{"target": "<absolute path>", "by": "<program>"}` (a contract MoodMiner
+  writes; `junctions.LINK_FILE` / `read_link_file`): its code lives at
+  `target`, the program `by` owns it. MoodMiner writes one as
+  `custom_nodes/ComfyUI-MoodMiner` because the processes it starts run under
+  Windows' RedirectionTrust mitigation and cannot cross a junction made
+  without admin rights (`WinError 448`). It has no `.git`, so discovery
+  checks it **before** the `.git` filter (a known folder name still wins).
+  An unreadable file, no `target` or a relative one → an ordinary folder. A
+  missing target is listed anyway (the card names it) and printed.
+
+The window shows it as a read-only `LinkedNodeCard` (badge "Linked", never
+selectable, kept out of `plan_install`, `merge_config` and the workflow
+matching), **pinned** at the top of the grid (`ResponsiveCardGrid.add_card(card,
+pinned=True)`: pinned cards lead in arrival order, the "+" stays last) —
+appended, the background scan's card came after every tracked node, out of
+sight. Promoted to the list, an uninstall would remove the link and take that
+program out of ComfyUI — met in real use. A junction the list does track (the
+GitLab layout) stays a `NodeCard`.
 
 ### `user_settings.json` (settings.py)
 Schema:
@@ -350,6 +365,12 @@ folder, opts out and stays clickable during an install).
   Windows' trust store instead of PowerShell. `tests/test_junctions.py` and
   `tests/test_http.py` spy `Popen`. What still starts a shell lives in the
   window only: ComfyUI's `update_comfyui.bat` and the generated bundle `.bat`.
+- **A linked node is never removed from here.** It only ever becomes a
+  `LinkedNodeCard` (never in an install plan, a config merge or a workflow
+  match), and the package-repair shadow scan skips a folder holding
+  `linked-node.json` (it needs no Python file of its own, so it would pass
+  for an empty stray dir). `tests/test_orphans.py` and
+  `tests/test_package_repair.py` hold this.
 - Destructive git commands run inside a node folder go through a guard on
   `git_ops.is_repo_root` (built into `git_ops.discard_changes`, behind the
   card's *Revert changes...*). git searches the parent directories for a
@@ -384,7 +405,8 @@ the referenced model files.
 - **More unit tests.** `tests/` (stdlib `unittest`, real git on local temp
   repos, a fake portable — see `tests/_support.py`) covers `config` (portable
   override), `CustomNode.clone`, `install_configured_nodes`, `cli.py`,
-  `junctions`, `http` and `orphans`. Still untested though Qt-free:
+  `junctions`, `http`, `orphans`, the shadow scan's link-folder guard and,
+  offscreen, the linked card and the grid's pinning. Still untested though Qt-free:
   `plan_install`, `merge_config`, `resolve_workflows`, `workflow_resolver`.
 - **`load_custom_nodes` re-seeds over a corrupt `user_settings.json`**:
   `load_raw` returns `{}` on invalid JSON, so the list is rebuilt from

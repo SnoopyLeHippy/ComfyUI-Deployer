@@ -219,7 +219,7 @@ class CustomNodeDeployerApp(QMainWindow):
     _comfy_started = pyqtSignal()
     _comfy_stopped = pyqtSignal()
     _orphan_found = pyqtSignal(str, str, str, str, bool)  # name, repo, ref, description, from_workflow
-    _linked_found = pyqtSignal(str, str)  # folder name, junction target
+    _linked_found = pyqtSignal(str, str)  # folder name, target (junction or linked-node.json)
     _workflow_done = pyqtSignal(object)          # dict with resolved/conflicts/unresolved
     _bundle_workflow_resolved = pyqtSignal(object)  # dict for bundle creation path
     _ui_call = pyqtSignal(object)  # marshals a callable onto the UI thread from worker threads
@@ -465,10 +465,15 @@ class CustomNodeDeployerApp(QMainWindow):
             self._refresh_install_btn()
 
     def _add_linked_card(self, name: str, target: str):
-        """UI-thread: show an untracked junction, read-only (see LinkedNodeCard)."""
+        """UI-thread: show a linked node, read-only (see LinkedNodeCard).
+
+        Pinned at the top: found by the background scan, it would otherwise
+        come after every tracked node, out of sight.
+        """
         card = LinkedNodeCard(name, target)
-        self.card_grid.add_card(card)
+        self.card_grid.add_card(card, pinned=True)
         self._linked_cards.append(card)
+        print(f"Linked: {name} -> {target}")
 
     _UPDATE_CHECK_WORKERS = 8  # concurrent git subprocesses for the checks below
 

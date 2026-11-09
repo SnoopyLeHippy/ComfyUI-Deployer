@@ -1,4 +1,4 @@
-"""Card for a junction in custom_nodes that another program put there and keeps."""
+"""Card for a linked node in custom_nodes: another program put it there and keeps it."""
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QCursor
@@ -10,12 +10,14 @@ from deployer.ui.widgets.card_state import CardState
 
 
 class LinkedNodeCard(BaseCard):
-    """Read-only card for an untracked junction (``orphans.UntrackedNodes.linked``).
+    """Read-only card for a linked node (``orphans.UntrackedNodes.linked``).
 
-    Never selectable, no requirements checkbox: it cannot be added to the
-    configuration — tracking it would let an install remove the junction, and
-    with it the program that linked itself into ComfyUI (MoodMiner's
-    ``ComfyUI-MoodMiner``). Whoever made the link keeps it.
+    A junction, or a link folder (``linked-node.json``) whose code lives at
+    *target*. Never selectable, no requirements checkbox: it cannot be added
+    to the configuration — tracking it would let an install remove the link,
+    and with it the program that linked itself into ComfyUI (MoodMiner's
+    ``ComfyUI-MoodMiner``). Whoever made the link keeps it. The window pins it
+    at the top of the grid.
     """
 
     _MAX_INFO = 70
@@ -26,7 +28,7 @@ class LinkedNodeCard(BaseCard):
         super().__init__(name, parent=parent)
         self.req_checkbox.hide()
         self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
-        self.setToolTip(f"A junction to {target or 'an unknown folder'}, managed outside "
+        self.setToolTip(f"Linked to {target or 'an unknown folder'}, managed outside "
                         "ComfyUI Deployer: it is never removed from here.")
         self.refresh()
 

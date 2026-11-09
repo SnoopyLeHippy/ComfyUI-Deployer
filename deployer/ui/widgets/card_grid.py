@@ -5,7 +5,13 @@ from PyQt6.QtWidgets import QGridLayout, QSizePolicy, QWidget
 
 
 class ResponsiveCardGrid(QWidget):
-    """Grid that reflows fixed-size cards based on available viewport width."""
+    """Grid that reflows fixed-size cards based on available viewport width.
+
+    Pinned cards (``add_card(card, pinned=True)``) lead the grid in their
+    order of arrival, ahead of every other card — a card found late (the
+    "Linked" one comes from a background scan) stays in sight without
+    scrolling. The add button, when set, is always last.
+    """
 
     CARD_WIDTH = 320
     CARD_MAX_WIDTH = 400
@@ -18,14 +24,15 @@ class ResponsiveCardGrid(QWidget):
         self._grid = QGridLayout(self)
         self._grid.setContentsMargins(0, 0, 0, 0)
         self._grid.setSpacing(self.CARD_SPACING)
+        self._pinned: list[QWidget] = []
         self._cards: list[QWidget] = []
         self._cols = 1
         self._add_btn: QWidget | None = None
         self._stretch_row: int = -1
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
-    def add_card(self, card: QWidget):
-        self._cards.append(card)
+    def add_card(self, card: QWidget, *, pinned: bool = False):
+        (self._pinned if pinned else self._cards).append(card)
         self._relayout()
 
     def set_add_button(self, btn: QWidget):
@@ -33,10 +40,12 @@ class ResponsiveCardGrid(QWidget):
         self._relayout()
 
     def remove_card(self, card: QWidget):
-        if card in self._cards:
-            self._cards.remove(card)
-            card.setParent(None)
-            self._relayout()
+        for cards in (self._pinned, self._cards):
+            if card in cards:
+                cards.remove(card)
+                card.setParent(None)
+                self._relayout()
+                return
 
     def update_cols(self, viewport_width: int):
         """Recompute columns from the viewport width and relayout if changed."""
@@ -55,7 +64,7 @@ class ResponsiveCardGrid(QWidget):
         if self._stretch_row >= 0:
             self._grid.setRowStretch(self._stretch_row, 0)
             self._stretch_row = -1
-        all_items = list(self._cards)
+        all_items = [*self._pinned, *self._cards]
         if self._add_btn is not None:
             all_items.append(self._add_btn)
         for i, item in enumerate(all_items):
@@ -73,7 +82,7 @@ class ResponsiveCardGrid(QWidget):
         self.updateGeometry()
 
     def sizeHint(self) -> QSize:
-        total = len(self._cards) + (1 if self._add_btn else 0)
+        total = len(self._pinned) + len(self._cards) + (1 if self._add_btn else 0)
         if not total:
             return QSize(0, 0)
         num_rows = (total + self._cols - 1) // self._cols

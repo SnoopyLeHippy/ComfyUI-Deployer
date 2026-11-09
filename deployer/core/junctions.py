@@ -9,8 +9,15 @@ No process is started here: junctions are read with ``os.lstat`` and created
 through the Windows API (``_winapi.CreateJunction``), never ``fsutil`` nor
 ``cmd /c mklink`` — endpoint security flags script-host → shell chains, and
 the window checks every ``custom_nodes`` folder as it opens.
+
+A **link folder** is the other way a program puts a node of its own into
+``custom_nodes``: a real folder holding :data:`LINK_FILE`, its code living at
+the target the file names. MoodMiner writes one instead of a junction, which
+the processes it starts (under Windows' RedirectionTrust mitigation) cannot
+cross when it was made without admin rights. :func:`read_link_file` reads it.
 """
 
+import json
 import os
 import shutil
 import stat
@@ -20,6 +27,29 @@ from deployer.core.filesystem import force_remove_readonly
 
 # Win32 namespace marker prepended by os.readlink to junction targets.
 _WIN32_NAMESPACE_PREFIX = "\\\\?\\"
+
+#: A folder holding this file is a *linked* node:
+#: ``{"target": "<absolute path>", "by": "<program>"}`` — its code lives at
+#: ``target`` and the program ``by`` owns it. Contract written by MoodMiner.
+LINK_FILE = "linked-node.json"
+
+
+def read_link_file(path: str) -> str | None:
+    """Return the target named by *path*'s :data:`LINK_FILE`, or ``None``.
+
+    ``None`` when the file is absent, unreadable, not a JSON object, or names
+    no absolute ``target`` (MoodMiner refuses the same) — the folder is then
+    an ordinary one. The target need not exist: a link whose program is gone
+    still says where it led. A byte-order mark is accepted.
+    """
+    try:
+        with open(os.path.join(path, LINK_FILE), encoding="utf-8-sig") as fh:
+            target = json.load(fh).get("target")
+    except (OSError, ValueError, AttributeError):  # ValueError: bad JSON or encoding
+        return None
+    if not isinstance(target, str) or not os.path.isabs(target):
+        return None
+    return os.path.normpath(target)
 
 
 def get_junction_target(path: str) -> str:
