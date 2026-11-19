@@ -11,9 +11,22 @@ import threading
 from typing import Callable
 
 from deployer.config import COMFYUI_DIR, PORTABLE_DIR, PYTHON_EXE
+from deployer.core.junctions import folder_arguments
 
 
 _Callback = Callable[[], None]
+
+
+def launch_command() -> list[str]:
+    """ComfyUI's command line: the portable's interpreter on ``main.py``.
+
+    The junctioned ``models`` / ``output`` / ``input`` folders are named by
+    argument too (``junctions.folder_arguments``): started from MoodMiner,
+    this window and the ComfyUI it starts cannot cross those junctions.
+    """
+    main_py = os.path.join(COMFYUI_DIR, "main.py")
+    return [PYTHON_EXE, "-s", main_py, "--windows-standalone-build", "--enable-cors-header",
+            *folder_arguments(COMFYUI_DIR)]
 
 
 class ComfyRunner:
@@ -51,8 +64,7 @@ class ComfyRunner:
     # -- internals ----------------------------------------------------------
 
     def _run(self) -> None:
-        main_py = os.path.join(COMFYUI_DIR, "main.py")
-        cmd = [PYTHON_EXE, "-s", main_py, "--windows-standalone-build", "--enable-cors-header"]
+        cmd = launch_command()
         print(f"Starting ComfyUI: {' '.join(cmd)}")
         # Force the child's stdout/stderr to UTF-8. When ComfyUI's output is
         # redirected to our pipe (not a real console), Python otherwise picks
