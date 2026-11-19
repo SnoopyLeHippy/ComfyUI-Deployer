@@ -237,6 +237,8 @@ Key points:
 
 `☰ → Advanced settings...` lets you point ComfyUI at external folders for models, output, input, or an `extra_model_paths.yaml`. The settings are written into the `settings` subdict of `user_settings.json` and applied as junctions inside `ComfyUI/`.
 
+**Run ComfyUI** also passes each junction's target to ComfyUI as `--models-directory`, `--output-directory` and `--input-directory` (only the arguments that ComfyUI knows — `--models-directory` needs ComfyUI 0.40 or later — and only for a target that exists). Why: a program started by MoodMiner runs under a Windows protection (RedirectionTrust) that hides a junction made without administrator rights, so ComfyUI saw those folders as empty. MoodMiner's own launchers do the same. A ComfyUI started from `run_nvidia_gpu.bat` outside MoodMiner goes through the junctions themselves.
+
 ![Advanced settings](docs/screenshots/advanced_settings.png)
 
 ## Configuration files

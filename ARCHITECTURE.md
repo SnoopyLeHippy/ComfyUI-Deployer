@@ -53,11 +53,12 @@ deployer/
     workflow_io.py               Extracts the workflow graph (JSON or PNG/WebP/JPEG image)
     workflow_resolver.py         Resolves missing node types → repos (ComfyUI-Manager DB)
     package_repair.py            5 diagnostic passes + pip package repair
-    junctions.py                 Windows junctions (os.lstat + _winapi, no process), linked-node.json reader
+    junctions.py                 Windows junctions (os.lstat + _winapi, no process), linked-node.json reader,
+                                 folder_arguments (junctioned folders → ComfyUI arguments)
     pip_runner.py                uv/pip wrapper
     http.py                      Download: certifi, then Windows' trust store (no process)
     filesystem.py                shutil.rmtree read-only helper
-    comfy_runner.py              Starts/stops the ComfyUI subprocess
+    comfy_runner.py              Starts/stops the ComfyUI subprocess (launch_command)
     comfy_update.py              Runs ComfyUI's update_comfyui.bat, preserving the junctions
   bundle/                        Export generation (folder or .bat)
     builder.py                   create_bundle() — folder-bundle orchestrator
@@ -289,6 +290,26 @@ its `put_*_here` placeholders straight into the user's external folders — and
 re-creates them in a `finally`, replacing the placeholder directories the
 checkout left behind.
 
+### Folder junctions under RedirectionTrust (core/junctions.py → folder_arguments)
+Started from MoodMiner (its ComfyUI-Local plugin runs `cli.py gui`), this
+window inherits Windows' RedirectionTrust mitigation, and so does the ComfyUI
+it starts: neither can cross a junction made without admin rights
+(`WinError 448`). ComfyUI then saw the junctioned `models` / `output` /
+`input` as empty. `comfy_runner.launch_command()` therefore appends
+`folder_arguments(COMFYUI_DIR)`: each junction's target (read with
+`os.readlink`, which the policy allows) as `--models-directory` /
+`--output-directory` / `--input-directory`. Left out: a real folder, a
+target that is no folder (argparse refuses a missing models folder), and a
+flag the portable's `comfy/cli_args.py` does not declare — an unknown
+argument stops ComfyUI (`--models-directory` is 0.40+). The junctions stay
+the record: bundles, `comfy_update` and a `run_nvidia_gpu.bat` started
+outside MoodMiner use them as before. MoodMiner's own launchers (the plugin's
+`launch`, the app's "Launch ComfyUI") apply the same rule.
+
+Still crossing the junctions from this window (broken under the policy):
+`bundle/model_copier.py` reads `MODELS_DIR`, and the `UiAction` paths
+(`ActionContext.models_dir` / `output_dir`) point inside them.
+
 ### Package repair (core/package_repair.py — the largest file)
 5 complementary passes to diagnose a broken `python_embeded`:
 1. `uv pip check` — declared dependency conflicts.
@@ -405,7 +426,8 @@ the referenced model files.
 - **More unit tests.** `tests/` (stdlib `unittest`, real git on local temp
   repos, a fake portable — see `tests/_support.py`) covers `config` (portable
   override), `CustomNode.clone`, `install_configured_nodes`, `cli.py`,
-  `junctions`, `http`, `orphans`, the shadow scan's link-folder guard and,
+  `junctions` (with `folder_arguments`, under RedirectionTrust in a child),
+  `http`, `orphans`, the shadow scan's link-folder guard and,
   offscreen, the linked card and the grid's pinning. Still untested though Qt-free:
   `plan_install`, `merge_config`, `resolve_workflows`, `workflow_resolver`.
 - **`load_custom_nodes` re-seeds over a corrupt `user_settings.json`**:

@@ -140,3 +140,43 @@ def remove_folder_junction(target_dir: str, backup_dir: str) -> None:
     elif not os.path.exists(target_dir):
         os.makedirs(target_dir)
         print(f"Recreated: {target_dir}")
+
+
+#: ComfyUI folders the Advanced settings may junction elsewhere, and the
+#: ComfyUI argument naming that folder directly.
+FOLDER_ARGUMENTS = (
+    ("models", "--models-directory"),
+    ("output", "--output-directory"),
+    ("input", "--input-directory"),
+)
+
+
+def folder_arguments(comfy_dir: str) -> list[str]:
+    """ComfyUI arguments naming the targets of the junctions among its folders.
+
+    A process under Windows' RedirectionTrust mitigation — this window when
+    MoodMiner started it, and the ComfyUI it starts in turn — cannot cross a
+    junction made without admin rights (``WinError 448``): ComfyUI found the
+    junctioned ``models`` / ``output`` / ``input`` empty. Each one's target,
+    read without crossing it (``os.readlink`` is allowed), becomes
+    ``--models-directory`` and so on; without the policy both lead to the same
+    folder. Left out: a real folder, a target that is no folder
+    (``--models-directory`` refuses a missing one), and a flag this ComfyUI's
+    ``comfy/cli_args.py`` does not declare — an unknown argument stops it from
+    starting (``--models-directory`` came with ComfyUI 0.40). Unreadable →
+    none. MoodMiner's launchers do the same.
+    """
+    try:
+        with open(os.path.join(comfy_dir, "comfy", "cli_args.py"), encoding="utf-8",
+                  errors="replace") as fh:
+            known = fh.read()
+    except OSError:
+        return []
+    arguments: list[str] = []
+    for folder, flag in FOLDER_ARGUMENTS:
+        if f'"{flag}"' not in known:
+            continue
+        target = read_junction_target(os.path.join(comfy_dir, folder))
+        if target and os.path.isdir(target):
+            arguments += [flag, target]
+    return arguments
