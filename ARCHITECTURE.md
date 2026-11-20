@@ -20,7 +20,8 @@ Four uses coexist in the same tool:
 3. **Plugin system** — adds custom steps to the bundle lifecycle (e.g. copying
    models from a shared folder) and custom buttons to the main window.
 4. **Headless command line** (`cli.py`) — installs the node list into a ComfyUI
-   portable that may live anywhere, for an outside installer to drive.
+   portable that may live anywhere, for an outside installer to drive; resolves
+   which packs a workflow still needs there and installs just those.
 
 ## Stack and environment
 
@@ -41,7 +42,7 @@ cli.py                           Entry point (command line), adds deployer/ to t
 CLAUDE.md                        Project instructions (ARCHITECTURE.md rule)
 deployer/
   __init__.py                    PORTABLE_DIR_ENV — the name config.py and cli.py share
-  cli.py                         install-nodes / install-deps / gui; JSON lines on stdout
+  cli.py                         install-nodes / resolve-nodes / install-deps / gui; JSON lines on stdout
   config.py                      Path constants (portable folder overridable) + GitLab resolution (.env)
   settings.py                    UserSettings — reads/writes user_settings.json
   core/                          Pure business logic (NO Qt import)
@@ -51,7 +52,11 @@ deployer/
     installer.py                 Orchestrates node install + requirements (window and headless)
     orphans.py                   Untracked custom_nodes dirs (URL + folder name): orphans, linked nodes
     workflow_io.py               Extracts the workflow graph (JSON or PNG/WebP/JPEG image)
-    workflow_resolver.py         Resolves missing node types → repos (ComfyUI-Manager DB)
+    workflow_resolver.py         Gathers the facts (object_info or static scan, folders + origins, tracked
+                                 list, DB) and resolves; the window's older result shape
+    node_resolution.py           Pure: a workflow's wanted types → install / update / repair / ambiguous / core /
+                                 blocked / unknown
+    node_db.py                   ComfyUI-Manager DB cached a day (NodeDb indexes) + the Comfy registry by cnr_id
     package_repair.py            5 diagnostic passes + pip package repair
     junctions.py                 Windows junctions (os.lstat + _winapi, no process), linked-node.json reader,
                                  folder_arguments (junctioned folders → ComfyUI arguments)
@@ -219,8 +224,9 @@ files — `user_settings.json`, `custom_nodes.json`, `plugins/`, `.cache/` — s
 in the project, so one Deployer clone manages one portable's node list.
 
 ### Headless command line (cli.py → deployer/cli.py)
-`cli.py install-nodes [--nodes-file FILE] | install-deps | gui`, for an outside installer (the
-MoodMiner ComfyUI-Local plugin runs it on the ComfyUI it installed).
+`cli.py install-nodes [--nodes-file FILE | --repo/--update/--repair URL…] | resolve-nodes |
+install-deps | gui`, for an outside installer (the MoodMiner ComfyUI-Local plugin runs it on the
+ComfyUI it installed, and before a run whose workflow uses a node type that ComfyUI lacks).
 `--portable DIR` becomes `DEPLOYER_PORTABLE_DIR` before `deployer.config` is
 first imported.
 
@@ -238,6 +244,23 @@ first imported.
   without case — appended, a tracked node keeping the user's ref. The result's
   `added` names them. Unreadable or empty → usage error (exit 2), nothing
   installed: an installer's list is never silently replaced by the default one.
+  `--repo` / `--update` / `--repair URL` (repeatable, not with `--nodes-file`) →
+  `installer.install_selected_nodes`: **only** those packs, each added to the
+  tracked list; `--repo` clones an absent one at its default branch (one on disk
+  is `present`, untouched), `--update` is `git pull --ff-only` refused on local
+  changes, a detached HEAD (pinned) or a non-clone, `--repair` touches no git;
+  then the requirements of all of them in one pass. The pack's folder is found by
+  git origin first (`folder_of_repo`), then by name — a same-named folder whose
+  origin is another repository is refused (never cloned over, never pulled). A
+  URL must be `https://`, `http://`, `git@` or an absolute path (never `-…`).
+* `resolve-nodes` (`--workflow FILE | --types JSON | --types-file FILE`,
+  `--object-info FILE | --comfy-url URL`, `--all-nodes`, `--refresh-db`,
+  `--no-registry`) → `workflow_resolver.resolve_nodes`; installs nothing, its
+  `result` is `Resolution.as_dict()` (next section). `--comfy-url` reads
+  `/object_info` with `http.client`, a kept-alive connection closed by the
+  client: `urllib`'s `Connection: close` lets the server close first, and on a
+  machine filtering loopback the 2 MB answer stalled ~20 s then reset (WinError
+  10054). Unreadable → a warning, the static scan instead.
 * `install-deps` — PyQt6, pyyaml, uv into the running interpreter (what
   `Launch.bat` does).
 * `gui` — `deployer.ui.run()` on that portable.
@@ -247,7 +270,9 @@ stdout carries only JSON lines — `{"message", "progress": 0..1}`,
 `{"warning"}`, one `{"result"}`. `EventChannel` duplicates descriptor 1 for
 them and points descriptor 1 and `sys.stdout` at stderr, so prints and child
 processes inheriting the handle (`git checkout` writes to stdout) land on
-stderr. Exit 0 / 1 (a listed node still missing) / 2 (usage, not a portable).
+stderr. That free text is UTF-8 whatever the console's code page (`main` reconfigures
+stderr: a caller's pipe got cp1252 otherwise). Exit 0 / 1 (a listed node still missing) /
+2 (usage, not a portable).
 
 ### Bundle pipeline (bundle/builder.py → create_bundle)
 Sequential steps: clone the Deployer (if requested) → download/extract a clean
@@ -269,13 +294,38 @@ version installed locally: the per-version asset URL didn't resolve for every
 release. `get_comfyui_version()` is now informational only (printed while
 downloading).
 
-### Workflow resolution (core/workflow_resolver.py)
-Extracts a workflow's `node.type` values, drops the built-ins (scan of `nodes.py`
-/ `comfy_extras`) and the already-installed nodes, then queries the
-ComfyUI-Manager DB (`extension-node-map.json` + `custom-node-list.json`, always
-re-downloaded, falling back to the local cache when offline). Returns 3
-categories: `resolved` (a single candidate repo, auto-added), `conflicts`
-(several repos → picker dialog), `unresolved` (not found in the DB).
+### Workflow resolution (core/node_resolution.py, node_db.py, workflow_resolver.py)
+`node_resolution` is pure. **Wanted**: `wanted_from_workflow` (graph or API prompt;
+subgraph definitions and legacy `extra.groupNodes` included; subgraph UUIDs,
+`workflow>…` group types and `FRONTEND_TYPES` left out; muted/bypassed nodes
+dropped unless `executable_only=False`, which the window uses) keeps each node's
+`properties.cnr_id` / `aux_id` / `ver`; `wanted_from_list` takes the same from a
+caller (MoodMiner sends the types its `/object_info` lacks). **Loaded**: from
+`/object_info`, each type's `python_module` (`custom_nodes.<folder>`) names the
+folders that loaded — the only way to see a failed import; else the static scan
+(regexes over `nodes.py`, `comfy_extras/` and `comfy_api_nodes/` recursively, and
+the packs' sources; a key computed at run time is missed). **Pack**: the node's
+`aux_id` (`owner/repo` → GitHub), then its `cnr_id` (`comfy-core` → core; the
+Manager id or the folder name among the DB entries, else the Comfy registry's
+`repository`), then the DB type map (one candidate, or the only one tracked /
+on disk — else `ambiguous`); a DB core type is `core`. **Action**: folder absent →
+`install`; present and loaded → `update`; present, not loaded → `repair` (static:
+`repair` when its sources declare the type, else `update`); a same-named folder
+cloned from another repository, or a non-git DB entry → `blocked`. A pack's
+frontend-only type (`FRONTEND_PACK_TYPES`: KJNodes' Set/Get; or one only its
+`nodename_pattern` claims) is satisfied once the pack loads (`frontend`).
+
+`node_db`: the two Manager files cached in `.cache/` for a day (`cached_json`:
+atomic, a non-JSON download never replaces the copy, a failed refresh keeps it,
+none at all → `NodeDbUnavailable`, which `resolve_nodes` turns into a warning).
+`NodeDb` keys every repository by the identity of its `files[0]` (47 entries'
+`reference` differs) and marks `copy` / `unzip` entries not installable. The
+registry's answers (a repository, or a 404) are cached in `registry.json`; an
+outage is not.
+
+The window keeps `resolve_workflow_nodes` (static scan, every node): `install`
+packs → `resolved`, `ambiguous` → `conflicts`, `unknown` + `core` + `blocked` →
+`unresolved`; `update` / `repair` are printed.
 
 ### ComfyUI update (core/comfy_update.py)
 "Update ComfyUI..." in the hamburger menu runs the portable's own
@@ -373,7 +423,7 @@ folder, opts out and stays clickable during an install).
   `from deployer.config import ...`: `DEPLOYER_PORTABLE_DIR` must be set before
   its first import. `deployer/cli.py` imports nothing from the package at module
   level for that reason (and refuses to run if `config` is already loaded).
-- `cli.py install-nodes` / `install-deps` keep stdout for JSON lines; anything
+- `cli.py install-nodes` / `resolve-nodes` / `install-deps` keep stdout for JSON lines; anything
   else written on that path goes to stderr. They start only `git` and
   `python -m uv|pip`, with argument lists — no `shell=True`, no PowerShell, no
   `.bat` (`comfy_update` isn't on this path): endpoint security flags
@@ -425,11 +475,13 @@ the referenced model files.
 - **Decide the fate of the legacy GitLab mode** (keep/document/remove).
 - **More unit tests.** `tests/` (stdlib `unittest`, real git on local temp
   repos, a fake portable — see `tests/_support.py`) covers `config` (portable
-  override), `CustomNode.clone`, `install_configured_nodes`, `cli.py`,
+  override), `CustomNode.clone`, `install_configured_nodes`,
+  `install_selected_nodes`, `cli.py`, the node resolution (`node_resolution`,
+  `node_db`, `workflow_resolver`),
   `junctions` (with `folder_arguments`, under RedirectionTrust in a child),
   `http`, `orphans`, the shadow scan's link-folder guard and,
   offscreen, the linked card and the grid's pinning. Still untested though Qt-free:
-  `plan_install`, `merge_config`, `resolve_workflows`, `workflow_resolver`.
+  `plan_install`, `merge_config`, `resolve_workflows`.
 - **`load_custom_nodes` re-seeds over a corrupt `user_settings.json`**:
   `load_raw` returns `{}` on invalid JSON, so the list is rebuilt from
   `custom_nodes.json` and the file rewritten — its `settings`, `steps` and

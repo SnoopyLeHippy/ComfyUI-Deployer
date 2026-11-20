@@ -229,6 +229,15 @@ def pull(cwd: str, *, check: bool = True) -> None:
     _stream_cmd(["git", "pull"], cwd=cwd, check=check)
 
 
+def pull_fast_forward(cwd: str) -> None:
+    """Run ``git pull --ff-only`` inside *cwd*, streaming output; raises on failure.
+
+    Never a merge commit: a branch that diverged from its upstream fails
+    instead, which leaves the clone as it was.
+    """
+    _stream_cmd(["git", "pull", "--ff-only"], cwd=cwd, check=True)
+
+
 def discard_changes(cwd: str, *, remove_untracked: bool = False) -> None:
     """Throw away the uncommitted changes in *cwd*, streaming git's output.
 

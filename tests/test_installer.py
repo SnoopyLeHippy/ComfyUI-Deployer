@@ -19,6 +19,7 @@ from deployer import config  # noqa: E402
 from deployer.core.installer import (  # noqa: E402
     add_listed_nodes,
     install_configured_nodes,
+    install_selected_nodes,
     load_custom_nodes,
     read_node_list,
 )
@@ -97,7 +98,8 @@ class InstallConfiguredNodesTest(SandboxTestCase):
     def test_an_empty_list_installs_nothing_and_still_ends(self):
         report, spy = self.run_install()
         self.assertEqual(report.as_dict(), {
-            "added": [], "installed": [], "present": [], "failed": [], "requirements_failed": [],
+            "added": [], "installed": [], "updated": [], "present": [], "failed": [],
+            "requirements_failed": [],
         })
         self.assertEqual(spy.calls, [])
         self.assertEqual(self.progress[-1][1], 1.0)
@@ -263,6 +265,95 @@ class InstallConfiguredNodesTest(SandboxTestCase):
         _, spy = self.run_install()  # assert_no_shell runs inside
         programs = {os.path.normcase(call["argv"][0]) for call in spy.calls}
         self.assertEqual(programs, {"git", os.path.normcase(config.PYTHON_EXE)})
+
+
+class InstallSelectedNodesTest(SandboxTestCase):
+    """install_selected_nodes — ``install-nodes --repo / --update / --repair``: only those packs."""
+
+    def setUp(self):
+        super().setUp()
+        self.warnings: list[str] = []
+
+    def repo(self, name: str, files: dict[str, str] | None = None) -> str:
+        return make_repo(os.path.join(self.repos, name), files)
+
+    def run_selected(self, install=(), update=(), repair=(), exit_code=lambda argv: 0):
+        with ProcessSpy([config.PYTHON_EXE], exit_code) as spy:
+            report = install_selected_nodes(list(install), list(update), list(repair),
+                                            warn=self.warnings.append)
+        spy.assert_no_shell(self)
+        return report, spy
+
+    def tracked(self) -> list[str]:
+        with open(self.settings_path, encoding="utf-8") as fh:
+            return [n["repo"] for n in json.load(fh)["nodes"]]
+
+    def test_install_clones_only_the_given_packs_and_tracks_them(self):
+        a, b = self.repo("NodeA", {"requirements.txt": "six\n"}), self.repo("NodeB")
+        with open(self.settings_path, "w", encoding="utf-8") as fh:
+            json.dump({"nodes": [{"repo": b, "ref": "main"}]}, fh)  # tracked, not asked for
+        report, spy = self.run_selected(install=[a])
+        self.assertEqual((report.added, report.installed, report.failed), (["NodeA"], ["NodeA"], []))
+        self.assertEqual(os.listdir(self.custom_nodes), ["NodeA"])
+        self.assertEqual(self.tracked(), [b, a])
+        self.assertEqual(InstallConfiguredNodesTest.requirement_args(spy),
+                         [[os.path.join(self.node_path("NodeA"), "requirements.txt")]])
+
+    def test_install_leaves_a_pack_already_there_alone(self):
+        a = self.repo("NodeA")
+        git("clone", "-q", a, self.node_path("NodeA"), cwd=self.work)
+        git("checkout", "-q", "-b", "mine", cwd=self.node_path("NodeA"))
+        report, _ = self.run_selected(install=[a])
+        self.assertEqual((report.present, report.installed), (["NodeA"], []))
+        self.assertEqual(git("rev-parse", "--abbrev-ref", "HEAD", cwd=self.node_path("NodeA")), "mine")
+
+    def test_update_fast_forwards_the_clone_found_by_its_origin(self):
+        a = self.repo("NodeA")
+        git("clone", "-q", a, self.node_path("Renamed"), cwd=self.work)  # another folder name
+        later = _support.commit(a, {"new_node.py": ""})
+        report, _ = self.run_selected(update=[a])
+        self.assertEqual((report.updated, report.failed), (["Renamed"], []))
+        self.assertEqual(head(self.node_path("Renamed")), later)
+
+    def test_update_refuses_local_changes_a_pinned_commit_and_an_absent_pack(self):
+        a, b, c = self.repo("NodeA"), self.repo("NodeB"), self.repo("NodeC")
+        for repo, name in ((a, "NodeA"), (b, "NodeB")):
+            git("clone", "-q", repo, self.node_path(name), cwd=self.work)
+        with open(os.path.join(self.node_path("NodeA"), "__init__.py"), "w") as fh:
+            fh.write("# edited\n")
+        git("checkout", "-q", "--detach", cwd=self.node_path("NodeB"))
+        _support.commit(a, {"x.py": ""})
+        before = head(self.node_path("NodeA"))
+        report, _ = self.run_selected(update=[a, b, c])
+        self.assertEqual(report.updated, [])
+        errors = {f["name"]: f["error"] for f in report.failed}
+        self.assertIn("local changes", errors["NodeA"])
+        self.assertIn("pinned", errors["NodeB"])
+        self.assertIn("not installed", errors["NodeC"])
+        self.assertEqual(head(self.node_path("NodeA")), before)
+        self.assertEqual(len(self.warnings), 3)
+
+    def test_repair_reinstalls_the_requirements_and_touches_no_git(self):
+        a = self.repo("NodeA", {"requirements.txt": "six\n"})
+        git("clone", "-q", a, self.node_path("NodeA"), cwd=self.work)
+        report, spy = self.run_selected(repair=[a])
+        self.assertEqual(report.failed, [])
+        self.assertEqual(InstallConfiguredNodesTest.requirement_args(spy),
+                         [[os.path.join(self.node_path("NodeA"), "requirements.txt")]])
+        self.assertFalse([c for c in spy.calls if c["argv"][0] == "git" and "pull" in c["argv"]])
+
+    def test_a_folder_holding_a_namesake_is_never_cloned_over_nor_updated(self):
+        # Local paths all share one identity (their basename): the origins are URLs here.
+        fork = make_repo(os.path.join(self.repos, "fork", "NodeA"))
+        git("clone", "-q", fork, self.node_path("NodeA"), cwd=self.work)
+        git("remote", "set-url", "origin", "https://github.com/fork/NodeA", cwd=self.node_path("NodeA"))
+        wanted = "https://github.com/owner/NodeA"
+        report, spy = self.run_selected(install=[wanted], update=[wanted])
+        self.assertEqual([f["name"] for f in report.failed], ["NodeA", "NodeA"])
+        self.assertIn("another repository", report.failed[0]["error"])
+        self.assertFalse([c for c in spy.calls if c["argv"][:2] in (["git", "clone"], ["git", "pull"])])
+        self.assertEqual(git("remote", "get-url", "origin", cwd=self.node_path("NodeA")),
+                         "https://github.com/fork/NodeA")
 
 
 class AddListedNodesTest(SandboxTestCase):

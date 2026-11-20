@@ -1,53 +1,60 @@
-"""Resolve workflow node types to the git repositories that provide them.
+"""Resolve a workflow's node types to the custom-node packs this ComfyUI still needs.
 
-Given a ComfyUI workflow JSON, this module returns the set of custom-node
-git repos required to load it. Built-in nodes (registered in ComfyUI's own
-``nodes.py`` / ``comfy_extras``) and already-installed custom nodes are
-filtered out; the remaining types are matched against the ComfyUI-Manager
-extension node map (fetched fresh on every call, falling back to a local
-cache if the network is unavailable).
+The classification itself is pure (:mod:`deployer.core.node_resolution`); this
+module gathers the facts it needs on this machine and hands them over:
+
+* what ComfyUI loaded — its ``/object_info`` when the caller has it (the
+  ground truth), else the **static scan**: the ``NODE_CLASS_MAPPINGS`` keys and
+  V3 ``node_id`` values found by regex in ComfyUI's ``nodes.py``,
+  ``comfy_extras/`` and ``comfy_api_nodes/`` (recursively) and in every
+  ``custom_nodes/`` folder;
+* the pack folders in ``custom_nodes/`` with their git origin;
+* the tracked list (``user_settings.json``);
+* the Manager DB (:mod:`deployer.core.node_db`, cached a day) and the Comfy
+  registry.
+
+:func:`resolve_nodes` is what ``cli.py resolve-nodes`` runs;
+:func:`resolve_workflow_nodes` keeps the window's older result shape.
 """
 
+import http.client
 import json
 import os
 import re
+import urllib.parse
 
 from deployer.config import (
-    CACHE_DIR,
     COMFY_EXTRAS_DIR,
+    COMFYUI_DIR,
     COMFYUI_NODES_PY,
-    CUSTOM_NODE_LIST_URL,
     CUSTOM_NODES_DIR,
-    EXTENSION_NODE_MAP_URL,
 )
-from deployer.core.http import download_file
-from deployer.core.workflow_io import (
-    collect_subgraph_ids,
-    iter_graph_nodes,
-    load_workflow_graph,
+from deployer.core import git_ops
+from deployer.core.node import repo_identity
+from deployer.core.node_db import NodeDbUnavailable, load_node_db, registry_repository
+from deployer.core.node_resolution import (
+    Folder,
+    Resolution,
+    loaded_from_object_info,
+    loaded_from_scan,
+    resolve,
+    wanted_from_workflow,
 )
+from deployer.core.workflow_io import load_workflow_graph
 
-
-# Node types handled by the ComfyUI frontend — never in NODE_CLASS_MAPPINGS.
-_FRONTEND_ONLY_TYPES = {
-    "Note",
-    "MarkdownNote",
-    "Reroute",
-    "PrimitiveNode",
-    "Primitive",
-}
+COMFY_API_NODES_DIR = os.path.join(COMFYUI_DIR, "comfy_api_nodes")
 
 _NODE_CLASS_MAPPINGS_RE = re.compile(
     r'NODE_CLASS_MAPPINGS\s*(?:\[\s*["\']([^"\']+)["\']\s*\]\s*=|\.update\s*\(\s*\{([^}]*)\})'
 )
 _DICT_KEY_RE = re.compile(r'["\']([^"\']+)["\']\s*:')
 
-# Newer comfy_extras modules register nodes via io.Schema(node_id="...").
+# Newer comfy_extras / comfy_api_nodes modules register nodes via io.Schema(node_id="...").
 _NODE_ID_RE = re.compile(r'node_id\s*=\s*["\']([^"\']+)["\']')
 
 
 # ---------------------------------------------------------------------------
-# Python source parsing helpers
+# Static scan (no running ComfyUI)
 # ---------------------------------------------------------------------------
 
 def _read_text(path: str) -> str:
@@ -59,8 +66,9 @@ def _extract_mapping_keys(source: str) -> set[str]:
     """Pull keys out of ``NODE_CLASS_MAPPINGS = {...}`` literals in *source*.
 
     Handles the dict literal form, ``NODE_CLASS_MAPPINGS["x"] = ...``,
-    ``.update({...})``, and the newer ``io.Schema(node_id="...")`` pattern
-    used by comfy_extras.
+    ``.update({...})``, and the ``io.Schema(node_id="...")`` pattern of V3
+    nodes. A key computed at run time (``MAPPINGS[Node.NAME] = Node``) is
+    invisible here — what ``/object_info`` exists for.
     """
     keys: set[str] = set()
 
@@ -89,180 +97,154 @@ def _extract_mapping_keys(source: str) -> set[str]:
     return keys
 
 
+def _scan_python_tree(root: str, *, followlinks: bool = False) -> set[str]:
+    types: set[str] = set()
+    if not os.path.isdir(root):
+        return types
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=followlinks):
+        dirnames[:] = [d for d in dirnames if d not in ("__pycache__", ".git", "node_modules")]
+        for fname in filenames:
+            if fname.endswith(".py"):
+                try:
+                    types.update(_extract_mapping_keys(_read_text(os.path.join(dirpath, fname))))
+                except OSError:
+                    continue
+    return types
+
+
 def load_builtin_node_types() -> set[str]:
-    """Node types registered by ComfyUI core (``nodes.py`` + ``comfy_extras``)."""
+    """Node types of ComfyUI itself: ``nodes.py``, ``comfy_extras/``, ``comfy_api_nodes/``."""
     print("Scanning ComfyUI builtin node types...")
     builtins: set[str] = set()
     if os.path.exists(COMFYUI_NODES_PY):
         builtins.update(_extract_mapping_keys(_read_text(COMFYUI_NODES_PY)))
-
-    if os.path.isdir(COMFY_EXTRAS_DIR):
-        for entry in os.scandir(COMFY_EXTRAS_DIR):
-            if entry.is_file() and entry.name.endswith(".py"):
-                builtins.update(_extract_mapping_keys(_read_text(entry.path)))
-
+    builtins |= _scan_python_tree(COMFY_EXTRAS_DIR)
+    builtins |= _scan_python_tree(COMFY_API_NODES_DIR)
     return builtins
 
 
 def extract_types_from_node_dir(node_dir: str) -> set[str]:
-    """``NODE_CLASS_MAPPINGS`` keys declared by Python files under *node_dir*.
+    """``NODE_CLASS_MAPPINGS`` keys declared by Python files under *node_dir* (junctions followed)."""
+    return _scan_python_tree(node_dir, followlinks=True)
 
-    Used both by :func:`load_installed_custom_node_types` (across all
-    custom_nodes/) and to check, for a single orphan-card directory, whether
-    its nodes are referenced by a given workflow.
-    """
-    types: set[str] = set()
-    if not os.path.isdir(node_dir):
-        return types
-    for dirpath, _, filenames in os.walk(node_dir, followlinks=True):
-        for fname in filenames:
-            if not fname.endswith(".py"):
-                continue
-            try:
-                source = _read_text(os.path.join(dirpath, fname))
-                types.update(_extract_mapping_keys(source))
-            except OSError:
-                continue
-    return types
+
+def _pack_dirs() -> list[str]:
+    """The folders of ``custom_nodes/`` ComfyUI would load (no ``.disabled``, no dot folder)."""
+    if not os.path.isdir(CUSTOM_NODES_DIR):
+        return []
+    names = []
+    for entry in os.scandir(CUSTOM_NODES_DIR):
+        if entry.name.startswith((".", "__")) or entry.name.endswith(".disabled"):
+            continue
+        if entry.is_dir(follow_symlinks=True):
+            names.append(entry.name)
+    return sorted(names, key=str.lower)
 
 
 def load_installed_custom_node_types() -> set[str]:
-    """Node types registered by custom nodes already on disk in ``custom_nodes/``.
-
-    Walks every Python file under ``CUSTOM_NODES_DIR`` (following junctions
-    for GitLab-linked nodes) and extracts their ``NODE_CLASS_MAPPINGS`` keys.
-    This lets us skip workflow types that are already satisfied by an
-    installed-but-untracked (orphan) custom node.
-    """
+    """Node types the sources in ``custom_nodes/`` declare (static scan)."""
     print("Scanning installed custom nodes...")
     types: set[str] = set()
-    if not os.path.isdir(CUSTOM_NODES_DIR):
-        return types
-
-    for entry in os.scandir(CUSTOM_NODES_DIR):
-        if not entry.is_dir(follow_symlinks=True):
-            continue
-        types.update(extract_types_from_node_dir(entry.path))
+    for name in _pack_dirs():
+        types |= extract_types_from_node_dir(os.path.join(CUSTOM_NODES_DIR, name))
     return types
 
 
 # ---------------------------------------------------------------------------
-# Workflow JSON parsing
+# Facts about this machine
+# ---------------------------------------------------------------------------
+
+def pack_folders(*, with_declared: bool) -> list[Folder]:
+    """``custom_nodes/``'s pack folders, each with its git origin (and declared types)."""
+    folders = []
+    for name in _pack_dirs():
+        path = os.path.join(CUSTOM_NODES_DIR, name)
+        origin = git_ops.get_remote_url(path) if git_ops.is_repo_root(path) else ""
+        declared = extract_types_from_node_dir(path) if with_declared else set()
+        folders.append(Folder(name, origin, declared))
+    return folders
+
+
+def tracked_identities() -> set[str]:
+    """Identities of the repositories in ``user_settings.json``'s node list."""
+    from deployer.settings import UserSettings
+
+    nodes = UserSettings.load_nodes()
+    return {repo_identity(n["repo"]) for n in nodes if isinstance(n, dict) and isinstance(n.get("repo"), str)}
+
+
+def fetch_object_info(comfy_url: str, *, timeout: int = 30) -> dict:
+    """``GET <comfy_url>/object_info`` from a ComfyUI on this machine or the LAN (no proxy).
+
+    ``http.client`` with a kept-alive connection the client closes once the
+    body is read — not ``urllib``, which asks ``Connection: close``: then the
+    server closes first, and on some Windows machines (an endpoint filter on
+    loopback) the 2 MB answer stalls ~20 s and ends in a reset (WinError 10054).
+    """
+    parsed = urllib.parse.urlsplit(comfy_url.strip())
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ValueError(f"{comfy_url!r} is no http(s) URL")
+    connection_class = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+    connection = connection_class(parsed.hostname, parsed.port, timeout=timeout)
+    path = parsed.path.rstrip("/") + "/object_info"
+    try:
+        connection.request("GET", path, headers={"User-Agent": "ComfyUI-Deployer", "Accept": "application/json"})
+        response = connection.getresponse()
+        body = response.read()
+    finally:
+        connection.close()
+    if response.status != 200:
+        raise ValueError(f"{comfy_url} answered HTTP {response.status} for /object_info")
+    data = json.loads(body.decode("utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"{comfy_url}/object_info returned no object")
+    return data
+
+
+# ---------------------------------------------------------------------------
+# Entry points
+# ---------------------------------------------------------------------------
+
+def resolve_nodes(wanted, *, object_info: dict | None = None, refresh_db: bool = False,
+                  use_registry: bool = True, tracked: set[str] | None = None,
+                  warn=print) -> Resolution:
+    """Resolve *wanted* (:mod:`node_resolution`'s ``WantedNode`` map) on this ComfyUI.
+
+    With *object_info*, what ComfyUI loaded is exact; without it, the static
+    scan stands in. A Manager DB that cannot be had (offline, no cache) is a
+    warning: the workflow's own ``aux_id`` / ``cnr_id`` still resolve.
+    """
+    if object_info is not None:
+        loaded = loaded_from_object_info(object_info)
+        folders = pack_folders(with_declared=False)
+    else:
+        folders = pack_folders(with_declared=True)
+        types = load_builtin_node_types()
+        for folder in folders:
+            types |= folder.declared
+        loaded = loaded_from_scan(types)
+
+    missing = [name for name in wanted if name not in loaded.types]
+    db = None
+    if missing:
+        try:
+            db = load_node_db(refresh=refresh_db)
+        except NodeDbUnavailable as exc:
+            warn(f"The custom node database is unavailable ({exc}); only the workflow's own "
+                 "pack ids can be resolved.")
+    registry = registry_repository if use_registry else None
+    return resolve(wanted, loaded, db, folders,
+                   tracked if tracked is not None else tracked_identities(), registry)
+
+
+# ---------------------------------------------------------------------------
+# The window's "Add from workflow" / "Create Bundle from workflow"
 # ---------------------------------------------------------------------------
 
 def extract_workflow_node_types(workflow_path: str) -> set[str]:
-    """Return the set of ``node.type`` values used by a workflow.
+    """Every node type a workflow (``.json`` or a generated image) uses, muted ones included."""
+    return set(wanted_from_workflow(load_workflow_graph(workflow_path), executable_only=False))
 
-    *workflow_path* may be a ``.json`` export or a ComfyUI-generated image
-    with the workflow embedded in its metadata. Nodes nested inside subgraph
-    definitions are included; the subgraph UUID "types" themselves are
-    excluded (they are instances, not custom nodes).
-    """
-    data = load_workflow_graph(workflow_path)
-    subgraph_ids = collect_subgraph_ids(data)
-    types: set[str] = set()
-    for node in iter_graph_nodes(data):
-        ntype = node.get("type")
-        if isinstance(ntype, str) and ntype and ntype not in subgraph_ids:
-            types.add(ntype)
-    return types
-
-
-# ---------------------------------------------------------------------------
-# Network helpers — always fetch fresh, fall back to cache on error
-# ---------------------------------------------------------------------------
-
-def _cache_path(name: str) -> str:
-    return os.path.join(CACHE_DIR, name)
-
-
-def _load_fresh_json(name: str, url: str) -> dict:
-    """Always download *url* to the local cache file, return parsed JSON.
-
-    If the download fails, the existing cached copy is used as a fallback
-    so the feature degrades gracefully when offline.
-    """
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    path = _cache_path(name)
-    try:
-        download_file(url, path, timeout=30)
-    except Exception as exc:  # noqa: BLE001
-        if not os.path.exists(path):
-            raise RuntimeError(
-                f"Failed to download {url} and no local cache available: {exc}"
-            ) from exc
-        print(f"Warning: could not refresh {name} ({exc}); using cached copy")
-
-    with open(path, "r", encoding="utf-8") as fh:
-        return json.load(fh)
-
-
-# ---------------------------------------------------------------------------
-# DB index builders
-# ---------------------------------------------------------------------------
-
-def _build_type_to_repos_index(extension_map: dict) -> dict[str, list[str]]:
-    """``{node_type: [repo_url, ...]}`` — all repos that declare a type."""
-    index: dict[str, list[str]] = {}
-    for repo_url, entry in extension_map.items():
-        if not isinstance(entry, list) or not entry:
-            continue
-        node_types = entry[0]
-        if not isinstance(node_types, list):
-            continue
-        for ntype in node_types:
-            if isinstance(ntype, str):
-                index.setdefault(ntype, []).append(repo_url)
-    return index
-
-
-def _build_nodename_patterns(extension_map: dict) -> list[tuple[re.Pattern[str], str]]:
-    """Regexes that match display-name suffixes like ``Image Comparer (rgthree)``."""
-    patterns: list[tuple[re.Pattern[str], str]] = []
-    for repo_url, entry in extension_map.items():
-        if not isinstance(entry, list) or len(entry) < 2:
-            continue
-        meta = entry[1]
-        if not isinstance(meta, dict):
-            continue
-        pattern = meta.get("nodename_pattern")
-        if not isinstance(pattern, str) or not pattern:
-            continue
-        try:
-            patterns.append((re.compile(pattern), repo_url))
-        except re.error:
-            continue
-    return patterns
-
-
-def _build_repo_to_description(custom_node_list: dict) -> dict[str, str]:
-    out: dict[str, str] = {}
-    for entry in custom_node_list.get("custom_nodes", []):
-        ref = entry.get("reference", "")
-        desc = entry.get("description", "") or ""
-        if ref:
-            out[ref] = desc
-        for f in entry.get("files", []) or []:
-            if isinstance(f, str) and f not in out:
-                out[f] = desc
-    return out
-
-
-# ---------------------------------------------------------------------------
-# URL normalisation helpers
-# ---------------------------------------------------------------------------
-
-def _normalize_repo_url(url: str) -> str:
-    return url.strip().rstrip("/").removesuffix(".git")
-
-
-def _repo_basename(url: str) -> str:
-    return _normalize_repo_url(url).rsplit("/", 1)[-1].lower()
-
-
-# ---------------------------------------------------------------------------
-# Public result types
-# ---------------------------------------------------------------------------
 
 class ResolvedRepo:
     """A repo that unambiguously provides one or more missing workflow node types."""
@@ -279,102 +261,54 @@ class ResolvedRepo:
 
 
 class ConflictEntry:
-    """Node type(s) that can be satisfied by more than one non-tracked repo.
-
-    The user must pick which repo (if any) to install.
-    Types with the same set of candidate repos are grouped into one entry.
-    """
+    """Node type(s) that more than one repo could provide; the user picks."""
 
     __slots__ = ("node_types", "repo_options")
 
     def __init__(self, node_types: list[str], repo_options: list[str]):
-        self.node_types = node_types      # e.g. ["TypeA", "TypeB"]
-        self.repo_options = repo_options  # e.g. ["https://github.com/x/foo", ...]
+        self.node_types = node_types
+        self.repo_options = repo_options
 
     def __repr__(self) -> str:
         return f"ConflictEntry(types={self.node_types!r}, options={self.repo_options!r})"
 
 
-# ---------------------------------------------------------------------------
-# Main entry point
-# ---------------------------------------------------------------------------
-
 def resolve_workflow_nodes(
     workflow_path: str,
     known_repos: set[str],
 ) -> tuple[list[ResolvedRepo], list[ConflictEntry], list[str], dict[str, str]]:
-    """Resolve a workflow's missing nodes to git repositories.
+    """The window's view of :func:`resolve_nodes` (static scan, every node).
 
-    *known_repos* is the set of repo URLs tracked in ``user_settings.json``.
-    Already-installed custom nodes on disk are also checked.
-
-    Returns ``(resolved, conflicts, unresolved, repo_to_desc)``:
-
-    * ``resolved``     — repos with exactly one candidate; safe to auto-add.
-    * ``conflicts``    — node type groups where 2+ repos could provide them;
-                         the user must choose.
-    * ``unresolved``   — node types not found in the DB at all.
-    * ``repo_to_desc`` — ``{repo_url: description}`` for any repo surfaced.
+    Returns ``(resolved, conflicts, unresolved, repo_to_desc)``: the packs to
+    install (``install``), the ambiguous types, and the types nothing installs
+    (``unknown``, ``core``, ``blocked``). A pack on disk that lacks a type
+    (``update`` / ``repair``) is printed — the window's cards update it.
+    *known_repos* are the repos the window already shows as installed.
     """
-    workflow_types = extract_workflow_node_types(workflow_path)
-    builtins = load_builtin_node_types()
-    installed = load_installed_custom_node_types()
-
-    candidates = sorted(workflow_types - builtins - installed - _FRONTEND_ONLY_TYPES)
-    if not candidates:
+    wanted = wanted_from_workflow(load_workflow_graph(workflow_path), executable_only=False)
+    tracked = {repo_identity(r) for r in known_repos} | tracked_identities()
+    result = resolve_nodes(wanted, tracked=tracked)
+    if result.is_empty():
         print("All node types are already available.")
         return ([], [], [], {})
 
-    print(f"Checking {len(candidates)} missing node type(s) against the database...")
-
-    extension_map = _load_fresh_json("extension-node-map.json", EXTENSION_NODE_MAP_URL)
-    custom_node_list = _load_fresh_json("custom-node-list.json", CUSTOM_NODE_LIST_URL)
-
-    type_to_repos = _build_type_to_repos_index(extension_map)
-    nodename_patterns = _build_nodename_patterns(extension_map)
-    repo_to_desc = _build_repo_to_description(custom_node_list)
-
-    known_normalized = {_normalize_repo_url(r) for r in known_repos}
-    known_basenames = {_repo_basename(r) for r in known_repos}
-
-    def _is_known(repo: str) -> bool:
-        return (
-            _normalize_repo_url(repo) in known_normalized
-            or _repo_basename(repo) in known_basenames
-        )
-
-    def _candidate_repos(ntype: str) -> list[str]:
-        repos = list(type_to_repos.get(ntype, []))
-        for pattern, repo in nodename_patterns:
-            if pattern.search(ntype) and repo not in repos:
-                repos.append(repo)
-        return repos
-
-    auto_by_repo: dict[str, list[str]] = {}        # repo → [types] (single candidate)
-    conflict_groups: dict[tuple[str, ...], list[str]] = {}  # (repos…) → [types]
-    unresolved: list[str] = []
-
-    for ntype in candidates:
-        all_repos = _candidate_repos(ntype)
-        if not all_repos:
-            unresolved.append(ntype)
-            continue
-        if any(_is_known(r) for r in all_repos):
-            continue
-
-        non_known = [r for r in all_repos if not _is_known(r)]
-        if len(non_known) == 1:
-            auto_by_repo.setdefault(non_known[0], []).append(ntype)
+    resolved, repo_to_desc = [], {}
+    for pack in result.packs:
+        repo_to_desc[pack["repo"]] = pack["description"]
+        if pack["action"] == "install":
+            resolved.append(ResolvedRepo(pack["repo"], pack["description"], pack["types"]))
+        elif pack["action"] == "update":
+            print(f"'{pack['folder']}' is installed but lacks {', '.join(pack['types'])}: update it.")
         else:
-            key = tuple(sorted(non_known))
-            conflict_groups.setdefault(key, []).append(ntype)
-
-    resolved = [
-        ResolvedRepo(repo, repo_to_desc.get(repo, ""), sorted(types))
-        for repo, types in sorted(auto_by_repo.items())
-    ]
-    conflicts = [
-        ConflictEntry(sorted(types), list(repos_key))
-        for repos_key, types in sorted(conflict_groups.items())
-    ]
+            print(f"'{pack['folder']}' declares {', '.join(pack['types'])} but ComfyUI may not load "
+                  "it: install its requirements.")
+    conflicts = []
+    for entry in result.ambiguous:
+        options = [o["repo"] for o in entry["options"]]
+        for option in entry["options"]:
+            repo_to_desc[option["repo"]] = option["description"]
+        conflicts.append(ConflictEntry(entry["types"], options))
+    unresolved = sorted(result.unknown + result.core + [t for b in result.blocked for t in b["types"]])
+    for ntype in result.core:
+        print(f"{ntype} is a ComfyUI node this ComfyUI lacks: update ComfyUI.")
     return (resolved, conflicts, unresolved, repo_to_desc)
