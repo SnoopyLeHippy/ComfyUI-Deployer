@@ -57,7 +57,10 @@ class CommandLineTest(unittest.TestCase):
             json.dump(entries, fh)
 
     def run_cli(self, *args: str) -> subprocess.CompletedProcess:
-        env = {k: v for k, v in os.environ.items() if k != PORTABLE_DIR_ENV}
+        # The console's own encoding, as a caller's pipe gets it: never a UTF-8 override
+        # (stderr must be UTF-8 by itself — `main` reconfigures it).
+        env = {k: v for k, v in os.environ.items()
+               if k not in (PORTABLE_DIR_ENV, "PYTHONIOENCODING", "PYTHONUTF8")}
         return subprocess.run(
             [sys.executable, "-s", os.path.join(self.project, "cli.py"), *args],
             cwd=self.work, env=env, capture_output=True, text=True, encoding="utf-8",
@@ -87,7 +90,8 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         events = self.events(proc)
         self.assertEqual(events[-1], {"result": {
-            "added": [], "installed": ["NodeA", "NodeB"], "present": [], "failed": [], "requirements_failed": [],
+            "added": [], "installed": ["NodeA", "NodeB"], "updated": [], "present": [], "failed": [],
+            "requirements_failed": [],
         }})
         progress = [e for e in events if "progress" in e]
         self.assertTrue(progress and all("message" in e for e in progress))
@@ -170,6 +174,104 @@ class CommandLineTest(unittest.TestCase):
         proc = self.run_cli("install-nodes")
         self.assertEqual(proc.returncode, 2)
         self.assertIn(os.path.join(self.project, "ComfyUI_windows_portable"), proc.stderr)
+
+    def write_cached_db(self, extension_map: dict, node_list: dict) -> None:
+        """A fresh Manager DB in the copy's own cache: nothing is downloaded."""
+        cache = os.path.join(self.project, ".cache")
+        os.makedirs(cache, exist_ok=True)
+        for name, data in (("extension-node-map.json", extension_map), ("custom-node-list.json", node_list)):
+            with open(os.path.join(cache, name), "w", encoding="utf-8") as fh:
+                json.dump(data, fh)
+
+    def test_resolve_nodes_reports_the_packs_in_json_only_and_installs_nothing(self):
+        kj = "https://github.com/kijai/ComfyUI-KJNodes"
+        ipa = "https://github.com/cubiq/ComfyUI_IPAdapter_plus"
+        self.write_cached_db(
+            {kj: [["INTConstant", "KJFuture"], {}], ipa: [["IPAdapterAdvanced"], {}]},
+            {"custom_nodes": [{"files": [ipa], "install_type": "git-clone", "title": "IPAdapter plus"}]},
+        )
+        kj_clone = os.path.join(self.portable, "ComfyUI", "custom_nodes", "ComfyUI-KJNodes")
+        make_repo(kj_clone)
+        git("remote", "add", "origin", kj, cwd=kj_clone)
+        broken = os.path.join(self.portable, "ComfyUI", "custom_nodes", "Broken")
+        os.makedirs(broken)
+        info = os.path.join(self.work, "object_info.json")
+        with open(info, "w", encoding="utf-8") as fh:
+            json.dump({"KSampler": {"python_module": "nodes"},
+                       "INTConstant": {"python_module": "custom_nodes.ComfyUI-KJNodes"}}, fh)
+        workflow = os.path.join(self.work, "shared workflow.json")
+        with open(workflow, "w", encoding="utf-8") as fh:
+            json.dump({"nodes": [
+                {"type": "KSampler"}, {"type": "INTConstant"}, {"type": "KJFuture"},
+                {"type": "IPAdapterAdvanced"}, {"type": "Mystery"}, {"type": "Muted", "mode": 2},
+            ]}, fh)
+
+        proc = self.run_cli("resolve-nodes", "--portable", self.portable, "--workflow", workflow,
+                            "--object-info", info, "--no-registry")
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        result = self.events(proc)[-1]["result"]
+        self.assertEqual(result["ground_truth"], "object_info")
+        self.assertEqual({p["folder"]: (p["action"], p["types"]) for p in result["packs"]}, {
+            "ComfyUI-KJNodes": ("update", ["KJFuture"]),
+            "ComfyUI_IPAdapter_plus": ("install", ["IPAdapterAdvanced"]),
+        })
+        self.assertEqual(result["unknown"], ["Mystery"])
+        self.assertEqual(sorted(os.listdir(os.path.join(self.portable, "ComfyUI", "custom_nodes"))),
+                         ["Broken", "ComfyUI-KJNodes"])
+
+        types = json.dumps([{"type": "Other", "aux_id": "studio/Pack"}])
+        proc = self.run_cli("resolve-nodes", "--portable", self.portable, "--types", types,
+                            "--object-info", info, "--no-registry")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual([p["repo"] for p in self.events(proc)[-1]["result"]["packs"]],
+                         ["https://github.com/studio/Pack"])
+
+    def test_resolve_nodes_usage_errors(self):
+        info = os.path.join(self.work, "info.json")
+        with open(info, "w", encoding="utf-8") as fh:
+            fh.write("[]")
+        for args, reason in (
+                ((), "exactly one of"),
+                (("--types", "[]", "--workflow", "x.json"), "exactly one of"),
+                (("--types", "{ nope"), "not JSON"),
+                (("--types", '{"a": 1}'), "JSON list"),
+                (("--workflow", os.path.join(self.work, "missing.json")), "cannot be read as a workflow"),
+                (("--types", "[]", "--object-info", info), "no /object_info object"),
+                (("--types", "[]", "--object-info", info, "--comfy-url", "http://x"), "not both"),
+        ):
+            with self.subTest(args=args):
+                proc = self.run_cli("resolve-nodes", "--portable", self.portable, *args)
+                self.assertEqual(proc.returncode, 2, proc.stderr)
+                self.assertEqual(proc.stdout, "")
+                self.assertIn(reason, proc.stderr)
+
+    def test_install_nodes_with_repo_installs_only_that_pack(self):
+        a = make_repo(os.path.join(self.repos, "NodeA"))
+        b = make_repo(os.path.join(self.repos, "NodeB"))
+        self.write_manifest([{"repo": b}])
+
+        proc = self.run_cli("install-nodes", "--portable", self.portable, "--repo", a)
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        result = self.events(proc)[-1]["result"]
+        self.assertEqual((result["installed"], result["failed"]), (["NodeA"], []))
+        self.assertEqual(os.listdir(os.path.join(self.portable, "ComfyUI", "custom_nodes")), ["NodeA"])
+
+    def test_install_nodes_selection_usage_errors(self):
+        listed = os.path.join(self.work, "nodes.json")
+        with open(listed, "w", encoding="utf-8") as fh:
+            json.dump([{"repo": "https://github.com/o/r"}], fh)
+        for args, reason in (
+                (("--repo", "https://github.com/o/r", "--nodes-file", listed), "cannot be combined"),
+                (("--update=--upload-pack=evil",), "not a git repository URL"),
+                (("--repair", "relative/path"), "not a git repository URL"),
+        ):
+            with self.subTest(args=args):
+                proc = self.run_cli("install-nodes", "--portable", self.portable, *args)
+                self.assertEqual(proc.returncode, 2, proc.stderr)
+                self.assertIn(reason, proc.stderr)
+        self.assertEqual(os.listdir(os.path.join(self.portable, "ComfyUI", "custom_nodes")), [])
 
     def test_an_unknown_command_is_a_usage_error(self):
         proc = self.run_cli("update-everything")

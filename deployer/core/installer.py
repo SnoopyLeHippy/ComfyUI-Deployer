@@ -13,6 +13,7 @@ from deployer.config import (
     PYTHON_EXE,
     SOURCE_NODES_JSON,
 )
+from deployer.core import git_ops
 from deployer.core.node import CustomNode, repo_folder_name, repo_identity
 from deployer.core.pip_runner import (
     ensure_uv,
@@ -188,16 +189,37 @@ def install(
 
 @dataclass
 class NodeInstallReport:
-    """What :func:`install_configured_nodes` did, by node folder name."""
+    """What :func:`install_configured_nodes` / :func:`install_selected_nodes` did, by folder name."""
 
-    added: list[str] = field(default_factory=list)  # added to the list (a --nodes-file)
+    added: list[str] = field(default_factory=list)  # added to the list (a --nodes-file, a --repo)
     installed: list[str] = field(default_factory=list)  # cloned by this run
+    updated: list[str] = field(default_factory=list)  # pulled by this run (--update)
     present: list[str] = field(default_factory=list)  # already on disk, left as is
     failed: list[dict] = field(default_factory=list)  # {"name", "repo", "error"}
     requirements_failed: list[str] = field(default_factory=list)  # requirements.txt paths
 
     def as_dict(self) -> dict:
         return asdict(self)
+
+
+def _install_requirements_of(paths: list[str], report: NodeInstallReport, progress, warn,
+                             start: float) -> None:
+    """Every ``requirements.txt`` under *paths* (4 levels deep), in one pass; failures reported."""
+    req_files: list[str] = []
+    for path in paths:
+        req_files.extend(find_requirement_files(path, 4))
+    if not (req_files or (paths and os.path.exists(INSIGHTFACE_WHL))):
+        return
+    progress("Installing the custom nodes' requirements...", start)
+    # The portable archive ships without uv; pip's fallback (-U) could
+    # replace its CUDA torch build — see ensure_uv.
+    if not ensure_uv(PYTHON_EXE):
+        warn("uv could not be installed; the requirements go through pip.")
+    if os.path.exists(INSIGHTFACE_WHL):
+        install_packages(PYTHON_EXE, [INSIGHTFACE_WHL])
+    report.requirements_failed = install_requirement_files(PYTHON_EXE, req_files)
+    for path in report.requirements_failed:
+        warn(f"Some requirements could not be installed: {path}")
 
 
 def install_configured_nodes(
@@ -246,19 +268,115 @@ def install_configured_nodes(
             continue
         report.installed.append(node.name)
 
-    on_disk = [node for node in nodes if os.path.isdir(node.local_path)]
-    req_files: list[str] = []
-    for node in on_disk:
-        req_files.extend(find_requirement_files(node.local_path, 4))
-    if req_files or (on_disk and os.path.exists(INSIGHTFACE_WHL)):
-        progress("Installing the custom nodes' requirements...", _CLONE_SHARE)
-        # The portable archive ships without uv; pip's fallback (-U) could
-        # replace its CUDA torch build — see ensure_uv.
-        if not ensure_uv(PYTHON_EXE):
-            warn("uv could not be installed; the requirements go through pip.")
-        report.requirements_failed = install_requirements(on_disk)
-        for path in report.requirements_failed:
-            warn(f"Some requirements could not be installed: {path}")
+    on_disk = [node.local_path for node in nodes if os.path.isdir(node.local_path)]
+    _install_requirements_of(on_disk, report, progress, warn, _CLONE_SHARE)
 
     progress("Custom nodes installed.", 1.0)
     return report
+
+
+# ---------------------------------------------------------------------------
+# Targeted install (``cli.py install-nodes --repo / --update / --repair``)
+# ---------------------------------------------------------------------------
+
+def folder_of_repo(repo: str) -> str | None:
+    """The ``custom_nodes/`` folder holding *repo*: by git origin, else by folder name.
+
+    ``None`` when there is none. A folder named like *repo* whose origin is
+    another repository is not *repo*'s (a fork, a namesake): raises
+    ``ValueError``, since cloning there is impossible and updating it wrong.
+    """
+    identity = repo_identity(repo)
+    name = repo_folder_name(repo).lower()
+    named = None
+    if not os.path.isdir(CUSTOM_NODES_DIR):
+        return None
+    for entry in os.scandir(CUSTOM_NODES_DIR):
+        if not entry.is_dir(follow_symlinks=True) or entry.name.endswith(".disabled"):
+            continue
+        origin = git_ops.get_remote_url(entry.path) if git_ops.is_repo_root(entry.path) else ""
+        if origin and repo_identity(origin) == identity:
+            return entry.path
+        if entry.name.lower() == name:
+            named = (entry.path, origin)
+    if named is None:
+        return None
+    path, origin = named
+    if origin:
+        raise ValueError(f"{os.path.basename(path)} holds another repository ({origin})")
+    return path
+
+
+def install_selected_nodes(
+    install: list[str] = (),
+    update: list[str] = (),
+    repair: list[str] = (),
+    progress: Callable[[str, float], None] = lambda message, fraction: None,
+    warn: Callable[[str], None] = lambda message: None,
+) -> NodeInstallReport:
+    """Make these packs usable — and only these: what a workflow's resolution asked for.
+
+    Each repository is added to the tracked list first (an added pack is one
+    a workflow relies on). Then:
+
+    * *install* — cloned at its default branch when absent; one already on
+      disk is left as it is (``present``);
+    * *update* — ``git pull --ff-only`` of its clone: refused (``failed``) when
+      it is not a clone, has local changes, or is on no branch (pinned);
+    * *repair* — nothing on the git side.
+
+    Then the requirements of every one of them on disk, in one pass: a pack
+    whose import failed for a missing dependency loads at ComfyUI's next start.
+    A failure is reported and never stops the others. Only ``git`` and
+    ``python -m uv|pip`` are started, with direct argument lists.
+    """
+    report = NodeInstallReport()
+    wanted = [r.strip() for r in [*install, *update, *repair] if isinstance(r, str) and r.strip()]
+    report.added = [repo_folder_name(e["repo"]) for e in add_listed_nodes([{"repo": r} for r in wanted])]
+    os.makedirs(CUSTOM_NODES_DIR, exist_ok=True)
+
+    targets: list[str] = []
+    jobs = [("install", r) for r in install] + [("update", r) for r in update] + [("repair", r) for r in repair]
+    total = max(len(jobs), 1)
+    for index, (kind, repo) in enumerate(jobs):
+        repo = repo.strip()
+        name = repo_folder_name(repo)
+        progress(f"{kind.capitalize()} {name} ({index + 1}/{len(jobs)})", _CLONE_SHARE * index / total)
+        try:
+            path = folder_of_repo(repo)
+            if kind == "install":
+                if path is not None:
+                    report.present.append(os.path.basename(path))
+                else:
+                    node = CustomNode(repo, "main", "")
+                    node.clone()
+                    path = node.local_path
+                    report.installed.append(name)
+            elif path is None:
+                raise ValueError("it is not installed")
+            elif kind == "update":
+                _update_clone(path)
+                report.updated.append(os.path.basename(path))
+        except (subprocess.CalledProcessError, OSError, ValueError) as exc:
+            report.failed.append({"name": name, "repo": repo, "error": str(exc)})
+            warn(f"{name} could not be {'installed' if kind == 'install' else kind + 'd'} "
+                 f"from {repo}: {exc}")
+            continue
+        if path not in targets:
+            targets.append(path)
+
+    _install_requirements_of(targets, report, progress, warn, _CLONE_SHARE)
+    progress("Custom nodes ready.", 1.0)
+    return report
+
+
+def _update_clone(path: str) -> None:
+    """Fast-forward a pack's clone to its upstream; ``ValueError`` when it must not be touched."""
+    if not git_ops.is_repo_root(path):
+        raise ValueError("it is not a git clone")
+    if git_ops.is_dirty(path):
+        raise ValueError("it has local changes")
+    branch = git_ops.get_current_branch(path)
+    if not branch or branch == "HEAD":
+        raise ValueError("it is pinned to a commit (no branch to update)")
+    git_ops.pull_fast_forward(path)

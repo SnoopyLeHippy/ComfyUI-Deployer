@@ -5,8 +5,18 @@ ignores the working directory, so ``python -m deployer.cli`` can't find the
 package)::
 
     python -s cli.py install-nodes [--portable DIR] [--nodes-file FILE]
+    python -s cli.py install-nodes [--portable DIR] [--repo URL]… [--update URL]… [--repair URL]…
+    python -s cli.py resolve-nodes [--portable DIR] (--workflow FILE | --types JSON | --types-file FILE)
+                                   [--object-info FILE | --comfy-url URL] [--all-nodes]
+                                   [--refresh-db] [--no-registry]
     python -s cli.py install-deps
     python -s cli.py gui [--portable DIR]
+
+``resolve-nodes`` installs nothing: its ``result`` is
+:meth:`deployer.core.node_resolution.Resolution.as_dict` — the packs to
+``install`` / ``update`` / ``repair``, the ``ambiguous`` types (with their
+options), ``core`` (update ComfyUI), ``blocked`` and ``unknown``. The caller
+picks, then runs ``install-nodes --repo / --update / --repair`` with them.
 
 ``--portable`` points the Deployer at another ComfyUI portable folder (the one
 holding ``ComfyUI\\`` and ``python_embeded\\``); default: ``DEPLOYER_PORTABLE_DIR``,
@@ -113,21 +123,102 @@ def _read_nodes_file(path: str) -> list[dict]:
     return entries
 
 
-def install_nodes(channel: EventChannel, nodes_file: str | None = None) -> int:
+def install_nodes(channel: EventChannel, nodes_file: str | None = None, *, install: list[str] = (),
+                  update: list[str] = (), repair: list[str] = ()) -> int:
     """Clone the configured nodes missing from ComfyUI and install their requirements.
 
-    *nodes_file* (``--nodes-file``) goes into the configured list first.
+    *nodes_file* (``--nodes-file``) goes into the configured list first. With
+    *install* / *update* / *repair* (``--repo`` / ``--update`` / ``--repair``),
+    only those packs (:func:`installer.install_selected_nodes`).
     """
     _require_portable()
-    from deployer.core.installer import install_configured_nodes
+    from deployer.core.installer import install_configured_nodes, install_selected_nodes
 
-    listed = _read_nodes_file(nodes_file) if nodes_file is not None else None
-    report = install_configured_nodes(progress=channel.message, warn=channel.warning, listed=listed)
+    if install or update or repair:
+        if nodes_file is not None:
+            raise UsageError("--nodes-file cannot be combined with --repo / --update / --repair.")
+        for repo in [*install, *update, *repair]:
+            if not _is_repo_url(repo):
+                raise UsageError(f"{repo!r} is not a git repository URL (https://… or git@…).")
+        report = install_selected_nodes(install, update, repair, progress=channel.message,
+                                        warn=channel.warning)
+    else:
+        listed = _read_nodes_file(nodes_file) if nodes_file is not None else None
+        report = install_configured_nodes(progress=channel.message, warn=channel.warning, listed=listed)
     channel.result(report.as_dict())
     if report.failed:
         names = ", ".join(entry["name"] for entry in report.failed)
         print(f"Not installed: {names}.", file=sys.stderr, flush=True)
         return 1
+    return 0
+
+
+def _is_repo_url(value: str) -> bool:
+    value = value.strip()
+    if value.startswith("-"):
+        return False  # never an option git would parse
+    return value.startswith(("https://", "http://", "git@")) or os.path.isabs(value)
+
+
+def _read_json_file(path: str, what: str):
+    try:
+        with open(path, "r", encoding="utf-8-sig") as fh:
+            return json.load(fh)
+    except (OSError, ValueError) as exc:
+        raise UsageError(f"{path} cannot be read as {what}: {exc}") from exc
+
+
+def resolve_nodes(channel: EventChannel, *, workflow: str | None, types: str | None,
+                  types_file: str | None, object_info_file: str | None, comfy_url: str | None,
+                  all_nodes: bool, refresh_db: bool, no_registry: bool) -> int:
+    """Which packs the workflow (or the listed types) still needs here — nothing is installed."""
+    _require_portable()
+    from deployer.core.node_resolution import wanted_from_list, wanted_from_workflow
+    from deployer.core.workflow_io import load_workflow_graph
+    from deployer.core.workflow_resolver import fetch_object_info, resolve_nodes as resolve
+
+    sources = [s for s in (workflow, types, types_file) if s is not None]
+    if len(sources) != 1:
+        raise UsageError("give exactly one of --workflow, --types, --types-file.")
+    if object_info_file is not None and comfy_url is not None:
+        raise UsageError("give --object-info or --comfy-url, not both.")
+
+    if workflow is not None:
+        try:
+            graph = load_workflow_graph(workflow)
+        except (OSError, ValueError) as exc:
+            raise UsageError(f"{workflow} cannot be read as a workflow: {exc}") from exc
+        wanted = wanted_from_workflow(graph, executable_only=not all_nodes)
+    else:
+        if types is not None:
+            try:
+                items = json.loads(types)
+            except ValueError as exc:
+                raise UsageError(f"--types is not JSON: {exc}") from exc
+        else:
+            items = _read_json_file(types_file, "a node type list")
+        if not isinstance(items, list):
+            raise UsageError("the node types must be a JSON list.")
+        wanted = wanted_from_list(items)
+
+    object_info = None
+    if object_info_file is not None:
+        object_info = _read_json_file(object_info_file, "an /object_info answer")
+        if not isinstance(object_info, dict):
+            raise UsageError(f"{object_info_file} holds no /object_info object.")
+    elif comfy_url is not None:
+        channel.message("Reading the node types ComfyUI loaded...", 0.1)
+        try:
+            object_info = fetch_object_info(comfy_url)
+        except Exception as exc:  # noqa: BLE001 - static scan instead
+            channel.warning(f"ComfyUI's /object_info cannot be read at {comfy_url} ({exc}); "
+                            "using a scan of the sources instead.")
+
+    channel.message("Resolving the node types...", 0.3)
+    result = resolve(wanted, object_info=object_info, refresh_db=refresh_db,
+                     use_registry=not no_registry, warn=channel.warning)
+    channel.message("Node types resolved.", 1.0)
+    channel.result(result.as_dict())
     return 0
 
 
@@ -189,12 +280,37 @@ def _parser() -> argparse.ArgumentParser:
         help="a JSON node list: the list on a fresh clone (instead of custom_nodes.json), "
              "added to the existing list otherwise",
     )
+    for flag, what in (("--repo", "clone this pack when absent"),
+                       ("--update", "fast-forward this pack's clone"),
+                       ("--repair", "reinstall this pack's requirements")):
+        install.add_argument(flag, metavar="URL", action="append", default=[],
+                             help=f"{what} (repeatable); only the packs given are touched")
+    resolve = commands.add_parser(
+        "resolve-nodes", parents=[portable],
+        help="which custom node packs a workflow still needs on that ComfyUI (installs nothing)",
+    )
+    resolve.add_argument("--workflow", metavar="FILE", help="a workflow .json, or an image embedding one")
+    resolve.add_argument("--types", metavar="JSON",
+                         help='node types: ["Type", …] or [{"type", "cnr_id"?, "aux_id"?, "ver"?}, …]')
+    resolve.add_argument("--types-file", metavar="FILE", help="the same list, in a file")
+    resolve.add_argument("--object-info", metavar="FILE", dest="object_info",
+                         help="ComfyUI's /object_info answer, saved: what it loaded")
+    resolve.add_argument("--comfy-url", metavar="URL", help="read /object_info from this running ComfyUI")
+    resolve.add_argument("--all-nodes", action="store_true",
+                         help="count muted and bypassed nodes too (what loading it in ComfyUI needs)")
+    resolve.add_argument("--refresh-db", action="store_true", help="download the node database even if cached")
+    resolve.add_argument("--no-registry", action="store_true", help="never ask the Comfy registry")
     commands.add_parser("install-deps", help="install the Deployer's own packages (PyQt6, pyyaml, uv) if missing")
     commands.add_parser("gui", parents=[portable], help="open the Deployer's window on that ComfyUI")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Free text goes out as UTF-8 whatever the console's code page: a caller
+    # reading a pipe on Windows otherwise got cp1252 ("…" as 0x85) and failed
+    # to decode it.
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
     args = _parser().parse_args(argv)
     portable = getattr(args, "portable", None)
     if portable:
@@ -210,7 +326,14 @@ def main(argv: list[str] | None = None) -> int:
             return gui()
         channel = EventChannel()
         if args.command == "install-nodes":
-            return install_nodes(channel, args.nodes_file)
+            return install_nodes(channel, args.nodes_file, install=args.repo, update=args.update,
+                                 repair=args.repair)
+        if args.command == "resolve-nodes":
+            return resolve_nodes(
+                channel, workflow=args.workflow, types=args.types, types_file=args.types_file,
+                object_info_file=args.object_info, comfy_url=args.comfy_url, all_nodes=args.all_nodes,
+                refresh_db=args.refresh_db, no_registry=args.no_registry,
+            )
         return install_deps(channel)
     except UsageError as exc:
         print(str(exc), file=sys.stderr, flush=True)
